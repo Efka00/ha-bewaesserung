@@ -23,7 +23,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry,
 
 
 class AutomatikSchalter(AnlageEntity, SwitchEntity):
-    """Automatik an/aus – zugleich die Saisonabschaltung (früher Master)."""
+    """Automatik an/aus (früher Master). Aus sperrt Zeit-/Feuchtesteuerung
+    und Nachholen; Handstart bleibt möglich."""
 
     _attr_icon = "mdi:sprinkler-variant"
 

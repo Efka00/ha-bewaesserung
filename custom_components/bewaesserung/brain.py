@@ -191,6 +191,17 @@ class Zone:
             return None
         return start + timedelta(minutes=self.laufzeit)
 
+    @property
+    def anzeige_ende(self) -> datetime | None:
+        """Für den Ende-Sensor: geplantes Ende während des Laufs, sonst
+        das tatsächliche letzte Ende (ersatzweise Start + Laufzeit)."""
+        if (ende := self.ende) is not None:
+            return ende
+        if roh := self.s.get("letztes_ende"):
+            return dt_util.parse_datetime(roh)
+        start = self.letzte
+        return start + timedelta(minutes=self.laufzeit) if start else None
+
     def abbrechen(self) -> None:
         for name in ("ende_abbruch", "extern_abbruch", "weg_abbruch"):
             abbruch = getattr(self, name)
@@ -668,6 +679,8 @@ class Anlage:
         if zone.freigabe:
             if not zone.handstart:
                 return ergebnis(ST_KEIN_BEDARF, "Von Hand gestoppt")
+            if not self.master and not zone.s.get("per_hand"):
+                return ergebnis(ST_GESPERRT, "Automatik aus")
             start = zone.letzte
             if start is None:
                 return ergebnis(ST_FEHLER, "Startzeit unbekannt, wird beendet")
@@ -700,6 +713,10 @@ class Anlage:
                     return ergebnis(ST_RUHEZEIT, sperrgrund)
             return ergebnis(ST_WARTET, "Handstart", True,
                             5000.0 + zone.basis_prio)
+
+        # --- Automatik aus: keine Zeit-/Feuchtesteuerung ---------------
+        if not self.master:
+            return ergebnis(ST_GESPERRT, "Automatik aus")
 
         # --- Ruhezeitfenster ------------------------------------------
         sperrgrund = self._fenster_pruefen(zone, jetzt)
@@ -803,20 +820,13 @@ class Anlage:
         jetzt = dt_util.now()
         zonen = self.zonen_sortiert()
 
-        # --- Globale Sperre: alles abschalten -------------------------
-        if not self.master:
-            sperre = "Automatik aus"
-            if self.nachholen:
-                _LOGGER.info("%d Nachholaufträge verworfen (%s)",
-                             len(self.nachholen), sperre)
-                self.nachholen = {}
-            for zone in zonen:
-                if zone.freigabe:
-                    await self._freigabe_aus(zone, sperre)
-                zone.zustand, zone.grund, zone.sensorfehler = (
-                    ST_GESPERRT, sperre, False)
-            self._status(sperre)
-            return
+        # --- Automatik aus: nur Handstart erlaubt ----------------------
+        # Automatisch gestartete Läufe enden in der Bewertung, Handstarts
+        # laufen normal (mit Rasenvorrang, Verteiler- und Parallel-Limit).
+        if not self.master and self.nachholen:
+            _LOGGER.info("%d Nachholaufträge verworfen (Automatik aus)",
+                         len(self.nachholen))
+            self.nachholen = {}
 
         # --- Nachholaufträge nach Fensterende verwerfen ----------------
         ende_txt = self.opt.get(CONF_FENSTER_ENDE)
@@ -912,7 +922,7 @@ class Anlage:
             z = b["zone"]
             z.zustand, z.grund, z.sensorfehler = (
                 b["zustand"], b["grund"], b["sensorfehler"])
-        self._status(None)
+        self._status(None if self.master else "Automatik aus")
 
     # ------------------------------------------------------------------
     #  Brain: Aktionen
@@ -973,8 +983,9 @@ class Anlage:
         self._start_abbruch.pop(zone.nr, None)
         async with self._lock:
             self._geplant.discard(zone.nr)
-            if not self.master:
-                _LOGGER.info("%s: geplanter Start verworfen (Sperre)", zone.titel)
+            if not self.master and not zone.handstart:
+                _LOGGER.info("%s: geplanter Start verworfen (Automatik aus)",
+                             zone.titel)
             elif not self._ist_verfuegbar(zone.ventil):
                 _LOGGER.info("%s: geplanter Start verworfen (Ventil nicht "
                              "erreichbar)", zone.titel)
@@ -999,6 +1010,9 @@ class Anlage:
                 jetzt = jetzt - timedelta(minutes=versatz)
         zone.letzte = jetzt
         zone.s["freigabe"] = True
+        # Merken, ob von Hand gestartet: nur solche Läufe überstehen
+        # das Ausschalten der Automatik.
+        zone.s["per_hand"] = zone.handstart
         # Handstart mitziehen: Anzeige "läuft" und zugleich Aus-Schalter.
         zone.s["handstart"] = True
         _LOGGER.info("%s freigegeben (%.0f min, Verteiler %s)", zone.titel,
@@ -1006,7 +1020,12 @@ class Anlage:
         await self._hand_ein(zone)
 
     async def _freigabe_aus(self, zone: Zone, grund: str) -> None:
-        """Freigabe zurückziehen, Handstart unverändert (globale Sperre)."""
+        """Freigabe zurückziehen, Handstart unverändert."""
+        if zone.freigabe:
+            jetzt = dt_util.now()
+            geplant = zone.ende
+            ende = min(jetzt, geplant) if geplant else jetzt
+            zone.s["letztes_ende"] = ende.isoformat()
         zone.s["freigabe"] = False
         await self._hand_aus(zone)
         _LOGGER.info("%s beendet (%s)", zone.titel, grund)
@@ -1029,7 +1048,8 @@ class Anlage:
             1 for z in self.zonen.values() if z.zustand in (ST_LAEUFT, ST_EXTERN))
         self.sperre = sperre or ""
         if sperre:
-            self.status = f"Gesperrt: {sperre}"
+            self.status = (f"{sperre} ({self.aktive} aktiv)" if self.aktive
+                           else sperre)
         elif self.rasen_aktiv:
             self.status = f"Rasen läuft ({self.aktive} aktiv)"
         else:

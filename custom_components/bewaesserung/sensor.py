@@ -97,7 +97,7 @@ class LetzteBewaesserung(ZonenEntity, SensorEntity):
 
 
 class Ende(ZonenEntity, SensorEntity):
-    """Geplantes Laufzeitende – leer, wenn die Zone nicht läuft."""
+    """Geplantes Laufzeitende während des Laufs, sonst das letzte Ende."""
 
     _attr_device_class = SensorDeviceClass.TIMESTAMP
     _attr_icon = "mdi:timer-sand"
@@ -107,7 +107,7 @@ class Ende(ZonenEntity, SensorEntity):
 
     @property
     def native_value(self) -> datetime | None:
-        return self.zone.ende
+        return self.zone.anzeige_ende
 
 
 class LaeufeHeute(ZonenEntity, SensorEntity):

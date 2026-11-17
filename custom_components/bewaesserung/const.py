@@ -75,9 +75,11 @@ ZONE_SPEICHER_DEFAULTS = {
     "modus": MODUS_AUS,
     "sollwert": 35.0,
     "letzte": None,            # ISO-Zeitstempel des letzten Starts
+    "letztes_ende": None,      # ISO-Zeitstempel des tatsächlichen Endes
     "laeufe": 0,
     "freigabe": False,
     "handstart": False,
+    "per_hand": False,         # laufender Lauf wurde von Hand gestartet
     "importiert": False,
 }
 
