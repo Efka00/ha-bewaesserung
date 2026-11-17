@@ -79,7 +79,7 @@
           "data_description": {
             "ventil": "Ein Schalter oder Ventil. Wichtig: das Gerät braucht eine eigene Abschaltung (z. B. Tasmota PulseTime).",
             "sensor": "Optional. Ohne Sensor läuft die Zone nur über Zeit oder von Hand.",
-            "verteiler": "Zonen mit demselben Verteiler laufen nie gleichzeitig.",
+            "verteiler": "Auswählen oder neuen Namen eintippen. Zonen mit demselben Verteiler laufen nie gleichzeitig.",
             "basis_prio": "Rang bei Zeitsteuerung und Handstart – höher ist dringender.",
             "exklusiv": "Die Zone läuft nur allein (z. B. hoher Durchsatz).",
             "parallel_erlaubt": "Die Zone belegt keinen Verteiler-Slot.",

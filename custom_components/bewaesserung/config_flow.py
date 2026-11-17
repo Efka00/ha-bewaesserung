@@ -93,8 +93,18 @@ def _anlage_schema(werte: dict[str, Any]) -> vol.Schema:
     )
 
 
-def _zone_schema(werte: dict[str, Any]) -> vol.Schema:
+def _zone_schema(werte: dict[str, Any], verteiler: list[str]) -> vol.Schema:
     w = {**ZONE_DEFAULTS, **werte}
+    # Dropdown mit den bereits verwendeten Verteilern, neue Namen
+    # können direkt eingetippt werden.
+    verteiler_auswahl = selector.SelectSelector(
+        selector.SelectSelectorConfig(
+            options=verteiler,
+            custom_value=True,
+            sort=True,
+            mode=selector.SelectSelectorMode.DROPDOWN,
+        )
+    )
     felder: dict[Any, Any] = {
         vol.Required(CONF_NR, default=w.get(CONF_NR, 1)): _zahl(1, 99),
         vol.Required(CONF_NAME, default=w.get(CONF_NAME, "")):
@@ -107,8 +117,9 @@ def _zone_schema(werte: dict[str, Any]) -> vol.Schema:
         _optional(CONF_SENSOR, w): selector.EntitySelector(
             selector.EntitySelectorConfig(domain="sensor")
         ),
-        vol.Required(CONF_VERTEILER, default=w.get(CONF_VERTEILER, "")):
-            selector.TextSelector(),
+        vol.Required(CONF_VERTEILER,
+                     description={"suggested_value": w.get(CONF_VERTEILER)}):
+            verteiler_auswahl,
         vol.Required(CONF_BASIS_PRIO, default=w[CONF_BASIS_PRIO]):
             _zahl(0, 999),
         vol.Required(CONF_EXKLUSIV, default=w[CONF_EXKLUSIV]):
@@ -187,6 +198,15 @@ class ZoneSubentryFlow(ConfigSubentryFlow):
                 return True
         return False
 
+    def _verteiler(self) -> list[str]:
+        """Alle bereits verwendeten Verteilernamen."""
+        return sorted({
+            str(sub.data[CONF_VERTEILER])
+            for sub in self._get_entry().subentries.values()
+            if sub.subentry_type == SUBENTRY_ZONE
+            and sub.data.get(CONF_VERTEILER)
+        })
+
     @staticmethod
     def _titel(daten: dict[str, Any]) -> str:
         return f"Zone {daten[CONF_NR]} {daten[CONF_NAME]}"
@@ -205,7 +225,7 @@ class ZoneSubentryFlow(ConfigSubentryFlow):
                 )
         return self.async_show_form(
             step_id="user",
-            data_schema=_zone_schema(user_input or {}),
+            data_schema=_zone_schema(user_input or {}, self._verteiler()),
             errors=fehler,
         )
 
@@ -225,6 +245,6 @@ class ZoneSubentryFlow(ConfigSubentryFlow):
                 )
         return self.async_show_form(
             step_id="reconfigure",
-            data_schema=_zone_schema(user_input or dict(sub.data)),
+            data_schema=_zone_schema(user_input or dict(sub.data), self._verteiler()),
             errors=fehler,
         )
