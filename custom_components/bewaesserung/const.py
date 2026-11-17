@@ -14,8 +14,6 @@ CONF_FENSTER_ENDE = "fenster_ende"
 CONF_FENSTER_HART = "fenster_hart"
 CONF_FENSTER_HANDSTART_FREI = "fenster_handstart_frei"
 CONF_RESET_UHRZEIT = "reset_uhrzeit"
-CONF_SENSOR_MIN = "sensor_min_gueltig"
-CONF_SENSOR_MAX = "sensor_max_gueltig"
 CONF_NOTIFY = "notify_dienst"
 
 # Werte aus CONFIG von bewaesserung_allocator.py v1.1
@@ -29,9 +27,12 @@ ANLAGE_DEFAULTS = {
     CONF_FENSTER_HART: True,
     CONF_FENSTER_HANDSTART_FREI: True,
     CONF_RESET_UHRZEIT: "00:10:00",
-    CONF_SENSOR_MIN: 1.0,
-    CONF_SENSOR_MAX: 99.0,
 }
+
+# Plausibilität der Feuchtesensoren (fest, nicht einstellbar).
+# Werte außerhalb gelten als Sensorfehler -> Rückfall auf Zeitsteuerung.
+SENSOR_MIN_GUELTIG = 1.0
+SENSOR_MAX_GUELTIG = 99.0
 
 # Zykluszeit des Brain in Sekunden (fest, wie in v1.1).
 ZYKLUS_SEKUNDEN = 30

@@ -37,8 +37,6 @@ from .const import (
     CONF_RASEN_NACHLAUF,
     CONF_RESET_UHRZEIT,
     CONF_SENSOR,
-    CONF_SENSOR_MAX,
-    CONF_SENSOR_MIN,
     CONF_START_ABSTAND,
     CONF_VENTIL,
     CONF_VERTEILER,
@@ -90,10 +88,6 @@ def _anlage_schema(werte: dict[str, Any]) -> vol.Schema:
                          default=w[CONF_FENSTER_HANDSTART_FREI]):
                 selector.BooleanSelector(),
             _optional(CONF_RESET_UHRZEIT, w): selector.TimeSelector(),
-            vol.Required(CONF_SENSOR_MIN, default=w[CONF_SENSOR_MIN]):
-                _zahl(0, 100, 0.5, "%"),
-            vol.Required(CONF_SENSOR_MAX, default=w[CONF_SENSOR_MAX]):
-                _zahl(0, 100, 0.5, "%"),
             _optional(CONF_NOTIFY, w): selector.TextSelector(),
         }
     )

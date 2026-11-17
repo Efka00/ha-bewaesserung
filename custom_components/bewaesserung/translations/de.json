@@ -17,8 +17,6 @@
           "fenster_hart": "Laufzeit muss ins Fenster passen",
           "fenster_handstart_frei": "Handstart ignoriert das Fenster",
           "reset_uhrzeit": "Täglicher Zähler-Reset um",
-          "sensor_min_gueltig": "Feuchte gültig ab",
-          "sensor_max_gueltig": "Feuchte gültig bis",
           "notify_dienst": "Benachrichtigungsdienst"
         },
         "data_description": {
@@ -26,7 +24,6 @@
           "rasen_nachlauf_sekunden": "Nach der letzten Rasenzone bleiben die Gartenzonen so lange gesperrt.",
           "fenster_hart": "Eine Zone startet nur, wenn ihre volle Laufzeit vor dem Fensterende abgeschlossen ist.",
           "reset_uhrzeit": "Leer lassen, dann zählt der Zähler als Gesamtsumme weiter.",
-          "sensor_min_gueltig": "Werte außerhalb des Bereichs gelten als Sensorfehler; die Zone fällt dann auf Zeitsteuerung zurück.",
           "notify_dienst": "z. B. notify.mobile_app_pixel_10_pro_xl. Leer lassen für keine Push-Nachrichten."
         }
       }
@@ -46,8 +43,6 @@
           "fenster_hart": "Laufzeit muss ins Fenster passen",
           "fenster_handstart_frei": "Handstart ignoriert das Fenster",
           "reset_uhrzeit": "Täglicher Zähler-Reset um",
-          "sensor_min_gueltig": "Feuchte gültig ab",
-          "sensor_max_gueltig": "Feuchte gültig bis",
           "notify_dienst": "Benachrichtigungsdienst"
         }
       }
