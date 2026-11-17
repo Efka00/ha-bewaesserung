@@ -20,7 +20,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry,
         entities: list[NumberEntity] = [Laufzeit(anlage, zone)]
         if zone.sensor:
             entities.append(Sollwert(anlage, zone))
-        async_add_entities(entities, config_subentry_id=zone.id)
+        async_add_entities(entities)
 
 
 class _ZonenZahl(ZonenEntity, NumberEntity):

@@ -6,7 +6,7 @@
     "step": {
       "user": {
         "title": "Bewässerung einrichten",
-        "description": "Globale Einstellungen der Anlage. Zonen werden anschließend über „Zone hinzufügen“ angelegt.",
+        "description": "Globale Einstellungen der Anlage. Zonen werden anschließend unter „Konfigurieren“ angelegt.",
         "data": {
           "max_parallel": "Maximal parallele Zonen",
           "cooldown_stunden": "Cooldown nach einem Lauf",
@@ -30,8 +30,20 @@
     }
   },
   "options": {
+    "error": {
+      "nr_vergeben": "Diese Zonennummer ist bereits vergeben."
+    },
     "step": {
       "init": {
+        "title": "Bewässerung",
+        "menu_options": {
+          "anlage": "Anlage einstellen",
+          "zone_neu": "Zone hinzufügen",
+          "zone_bearbeiten": "Zone bearbeiten",
+          "zone_loeschen": "Zonen löschen"
+        }
+      },
+      "anlage": {
         "title": "Anlage",
         "data": {
           "max_parallel": "Maximal parallele Zonen",
@@ -44,68 +56,84 @@
           "fenster_handstart_frei": "Handstart ignoriert das Fenster",
           "reset_uhrzeit": "Täglicher Zähler-Reset um",
           "notify_dienst": "Benachrichtigungsdienst"
-        }
-      }
-    }
-  },
-  "config_subentries": {
-    "zone": {
-      "entry_type": "Zone",
-      "initiate_flow": {
-        "user": "Zone hinzufügen"
-      },
-      "error": {
-        "nr_vergeben": "Diese Zonennummer ist bereits vergeben."
-      },
-      "abort": {
-        "reconfigure_successful": "Zone gespeichert."
-      },
-      "step": {
-        "user": {
-          "title": "Zone hinzufügen",
-          "data": {
-            "nr": "Nummer",
-            "name": "Name",
-            "ventil": "Ventil",
-            "sensor": "Feuchtesensor",
-            "verteiler": "Verteiler",
-            "basis_prio": "Priorität",
-            "exklusiv": "Exklusiv",
-            "parallel_erlaubt": "Parallel zum Verteiler erlaubt",
-            "rasen": "Rasenzone",
-            "cooldown_stunden": "Eigener Cooldown",
-            "max_extern_minuten": "Maximale Laufzeit ohne Freigabe",
-            "hmip_abschaltung": "HmIP-Selbstabschaltung setzen"
-          },
-          "data_description": {
-            "ventil": "Ein Schalter oder Ventil. Wichtig: das Gerät braucht eine eigene Abschaltung (z. B. Tasmota PulseTime).",
-            "sensor": "Optional. Ohne Sensor läuft die Zone nur über Zeit oder von Hand.",
-            "verteiler": "Auswählen oder neuen Namen eintippen. Zonen mit demselben Verteiler laufen nie gleichzeitig.",
-            "basis_prio": "Rang bei Zeitsteuerung und Handstart – höher ist dringender.",
-            "exklusiv": "Die Zone läuft nur allein (z. B. hoher Durchsatz).",
-            "parallel_erlaubt": "Die Zone belegt keinen Verteiler-Slot.",
-            "rasen": "Verdrängt alle anderen Zonen, verdrängte Zonen holen ihre Restlaufzeit nach.",
-            "cooldown_stunden": "Leer lassen für den Wert der Anlage.",
-            "max_extern_minuten": "Läuft das Ventil länger ohne Freigabe (z. B. von Hand geöffnet), wird es abgeschaltet. Muss über der längsten Laufzeit liegen.",
-            "hmip_abschaltung": "Nur bei Homematic-IP-Ventilen: vor dem Öffnen wird ON_TIME auf Laufzeit + 5 min gesetzt, damit das Ventil auch ohne Home Assistant schließt."
-          }
         },
-        "reconfigure": {
-          "title": "Zone bearbeiten",
-          "data": {
-            "nr": "Nummer",
-            "name": "Name",
-            "ventil": "Ventil",
-            "sensor": "Feuchtesensor",
-            "verteiler": "Verteiler",
-            "basis_prio": "Priorität",
-            "exklusiv": "Exklusiv",
-            "parallel_erlaubt": "Parallel zum Verteiler erlaubt",
-            "rasen": "Rasenzone",
-            "cooldown_stunden": "Eigener Cooldown",
-            "max_extern_minuten": "Maximale Laufzeit ohne Freigabe",
-            "hmip_abschaltung": "HmIP-Selbstabschaltung setzen"
-          }
+        "data_description": {
+          "cooldown_stunden": "Sperrzeit nach dem Ende einer Bewässerung, bevor dieselbe Zone erneut automatisch starten darf.",
+          "rasen_nachlauf_sekunden": "Nach der letzten Rasenzone bleiben die Gartenzonen so lange gesperrt.",
+          "fenster_hart": "Eine Zone startet nur, wenn ihre volle Laufzeit vor dem Fensterende abgeschlossen ist.",
+          "reset_uhrzeit": "Leer lassen, dann zählt der Zähler als Gesamtsumme weiter.",
+          "notify_dienst": "z. B. notify.mobile_app_pixel_10_pro_xl. Leer lassen für keine Push-Nachrichten."
+        }
+      },
+      "zone_neu": {
+        "title": "Zone hinzufügen",
+        "data": {
+          "nr": "Nummer",
+          "name": "Name",
+          "ventil": "Ventil",
+          "sensor": "Feuchtesensor",
+          "verteiler": "Verteiler",
+          "basis_prio": "Priorität",
+          "exklusiv": "Exklusiv",
+          "parallel_erlaubt": "Parallel zum Verteiler erlaubt",
+          "rasen": "Rasenzone",
+          "cooldown_stunden": "Eigener Cooldown",
+          "max_extern_minuten": "Maximale Laufzeit ohne Freigabe",
+          "hmip_abschaltung": "HmIP-Selbstabschaltung setzen"
+        },
+        "data_description": {
+          "ventil": "Ein Schalter oder Ventil. Wichtig: das Gerät braucht eine eigene Abschaltung (z. B. Tasmota PulseTime).",
+          "sensor": "Optional. Ohne Sensor läuft die Zone nur über Zeit oder von Hand.",
+          "verteiler": "Auswählen oder neuen Namen eintippen. Zonen mit demselben Verteiler laufen nie gleichzeitig.",
+          "basis_prio": "Rang bei Zeitsteuerung und Handstart – höher ist dringender.",
+          "exklusiv": "Die Zone läuft nur allein (z. B. hoher Durchsatz).",
+          "parallel_erlaubt": "Die Zone belegt keinen Verteiler-Slot.",
+          "rasen": "Verdrängt alle anderen Zonen, verdrängte Zonen holen ihre Restlaufzeit nach.",
+          "cooldown_stunden": "Leer lassen für den Wert der Anlage.",
+          "max_extern_minuten": "Läuft das Ventil länger ohne Freigabe (z. B. von Hand geöffnet), wird es abgeschaltet. Muss über der längsten Laufzeit liegen.",
+          "hmip_abschaltung": "Nur bei Homematic-IP-Ventilen: vor dem Öffnen wird ON_TIME auf Laufzeit + 5 min gesetzt, damit das Ventil auch ohne Home Assistant schließt."
+        }
+      },
+      "zone_bearbeiten": {
+        "title": "Zone bearbeiten",
+        "data": {
+          "zone": "Zone"
+        }
+      },
+      "zone_daten": {
+        "title": "{zone} bearbeiten",
+        "data": {
+          "nr": "Nummer",
+          "name": "Name",
+          "ventil": "Ventil",
+          "sensor": "Feuchtesensor",
+          "verteiler": "Verteiler",
+          "basis_prio": "Priorität",
+          "exklusiv": "Exklusiv",
+          "parallel_erlaubt": "Parallel zum Verteiler erlaubt",
+          "rasen": "Rasenzone",
+          "cooldown_stunden": "Eigener Cooldown",
+          "max_extern_minuten": "Maximale Laufzeit ohne Freigabe",
+          "hmip_abschaltung": "HmIP-Selbstabschaltung setzen"
+        },
+        "data_description": {
+          "ventil": "Ein Schalter oder Ventil. Wichtig: das Gerät braucht eine eigene Abschaltung (z. B. Tasmota PulseTime).",
+          "sensor": "Optional. Ohne Sensor läuft die Zone nur über Zeit oder von Hand.",
+          "verteiler": "Auswählen oder neuen Namen eintippen. Zonen mit demselben Verteiler laufen nie gleichzeitig.",
+          "basis_prio": "Rang bei Zeitsteuerung und Handstart – höher ist dringender.",
+          "exklusiv": "Die Zone läuft nur allein (z. B. hoher Durchsatz).",
+          "parallel_erlaubt": "Die Zone belegt keinen Verteiler-Slot.",
+          "rasen": "Verdrängt alle anderen Zonen, verdrängte Zonen holen ihre Restlaufzeit nach.",
+          "cooldown_stunden": "Leer lassen für den Wert der Anlage.",
+          "max_extern_minuten": "Läuft das Ventil länger ohne Freigabe (z. B. von Hand geöffnet), wird es abgeschaltet. Muss über der längsten Laufzeit liegen.",
+          "hmip_abschaltung": "Nur bei Homematic-IP-Ventilen: vor dem Öffnen wird ON_TIME auf Laufzeit + 5 min gesetzt, damit das Ventil auch ohne Home Assistant schließt."
+        }
+      },
+      "zone_loeschen": {
+        "title": "Zonen löschen",
+        "description": "Ausgewählte Zonen werden mit ihren Geräten und Entities entfernt.",
+        "data": {
+          "zone": "Zonen"
         }
       }
     }

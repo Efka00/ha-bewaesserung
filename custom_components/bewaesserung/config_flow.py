@@ -1,4 +1,9 @@
-"""Config-Flow: Anlage (Haupteintrag + Optionen) und Zonen (Subentries)."""
+"""Config-Flow: Anlage anlegen; Optionen = Anlage einstellen + Zonen verwalten.
+
+Die Zonen liegen in den Optionen der Anlage unter CONF_ZONEN als
+{zone_id: {...}}. Bis 0.2.x waren es Subentries – die Migration steht in
+__init__.py (async_migrate_entry).
+"""
 
 from __future__ import annotations
 
@@ -10,12 +15,11 @@ from homeassistant.config_entries import (
     ConfigEntry,
     ConfigFlow,
     ConfigFlowResult,
-    ConfigSubentryFlow,
     OptionsFlow,
-    SubentryFlowResult,
 )
 from homeassistant.core import callback
 from homeassistant.helpers import selector
+from homeassistant.util.ulid import ulid_now
 
 from .const import (
     ANLAGE_DEFAULTS,
@@ -41,10 +45,12 @@ from .const import (
     CONF_START_ABSTAND,
     CONF_VENTIL,
     CONF_VERTEILER,
+    CONF_ZONEN,
     DOMAIN,
-    SUBENTRY_ZONE,
     ZONE_DEFAULTS,
 )
+
+CONF_ZONE_AUSWAHL = "zone"
 
 
 def _zahl(minimum: float, maximum: float, schritt: float = 1,
@@ -106,7 +112,7 @@ def _zone_schema(werte: dict[str, Any], verteiler: list[str]) -> vol.Schema:
             mode=selector.SelectSelectorMode.DROPDOWN,
         )
     )
-    felder: dict[Any, Any] = {
+    return vol.Schema({
         vol.Required(CONF_NR, default=w.get(CONF_NR, 1)): _zahl(1, 99),
         vol.Required(CONF_NAME, default=w.get(CONF_NAME, "")):
             selector.TextSelector(),
@@ -134,8 +140,7 @@ def _zone_schema(werte: dict[str, Any], verteiler: list[str]) -> vol.Schema:
             _zahl(1, 600, 1, "min"),
         vol.Required(CONF_HMIP_ABSCHALTUNG, default=w[CONF_HMIP_ABSCHALTUNG]):
             selector.BooleanSelector(),
-    }
-    return vol.Schema(felder)
+    })
 
 
 def _bereinige(daten: dict[str, Any]) -> dict[str, Any]:
@@ -147,17 +152,23 @@ def _bereinige(daten: dict[str, Any]) -> dict[str, Any]:
     return daten
 
 
+def zone_titel(daten: dict[str, Any]) -> str:
+    return f"Zone {daten[CONF_NR]} {daten[CONF_NAME]}"
+
+
 class BewaesserungConfigFlow(ConfigFlow, domain=DOMAIN):
     """Legt die Anlage an."""
 
-    VERSION = 1
+    # 2 = Zonen in den Optionen statt als Subentries.
+    VERSION = 2
 
     async def async_step_user(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
         if user_input is not None:
             return self.async_create_entry(
-                title="Bewässerung", data={}, options=_bereinige(user_input)
+                title="Bewässerung", data={},
+                options={**_bereinige(user_input), CONF_ZONEN: {}},
             )
         return self.async_show_form(
             step_id="user", data_schema=_anlage_schema({})
@@ -166,88 +177,138 @@ class BewaesserungConfigFlow(ConfigFlow, domain=DOMAIN):
     @staticmethod
     @callback
     def async_get_options_flow(config_entry: ConfigEntry) -> OptionsFlow:
-        return AnlageOptionsFlow()
-
-    @classmethod
-    @callback
-    def async_get_supported_subentry_types(
-        cls, config_entry: ConfigEntry
-    ) -> dict[str, type[ConfigSubentryFlow]]:
-        return {SUBENTRY_ZONE: ZoneSubentryFlow}
+        return BewaesserungOptionsFlow()
 
 
-class AnlageOptionsFlow(OptionsFlow):
-    """Globale Einstellungen der Anlage ändern."""
+class BewaesserungOptionsFlow(OptionsFlow):
+    """Menü: Anlage einstellen, Zone hinzufügen/bearbeiten/löschen."""
+
+    def __init__(self) -> None:
+        self._zone_id: str | None = None
+
+    # ---- Hilfen -------------------------------------------------------
+
+    @property
+    def _zonen(self) -> dict[str, dict[str, Any]]:
+        return dict(self.config_entry.options.get(CONF_ZONEN, {}))
+
+    def _speichern(self, *, anlage: dict[str, Any] | None = None,
+                   zonen: dict[str, dict[str, Any]] | None = None
+                   ) -> ConfigFlowResult:
+        optionen = dict(self.config_entry.options)
+        if anlage is not None:
+            optionen.update(anlage)
+        if zonen is not None:
+            optionen[CONF_ZONEN] = zonen
+        return self.async_create_entry(data=optionen)
+
+    def _verteiler(self) -> list[str]:
+        return sorted({str(z[CONF_VERTEILER]) for z in self._zonen.values()
+                       if z.get(CONF_VERTEILER)})
+
+    def _nr_vergeben(self, nr: int, ausser: str | None = None) -> bool:
+        return any(int(z.get(CONF_NR, -1)) == nr
+                   for zid, z in self._zonen.items() if zid != ausser)
+
+    def _zonen_auswahl(self, mehrfach: bool) -> selector.SelectSelector:
+        sortiert = sorted(self._zonen.items(), key=lambda kv: int(kv[1][CONF_NR]))
+        return selector.SelectSelector(selector.SelectSelectorConfig(
+            options=[selector.SelectOptionDict(value=zid, label=zone_titel(z))
+                     for zid, z in sortiert],
+            multiple=mehrfach,
+            mode=selector.SelectSelectorMode.LIST if mehrfach
+            else selector.SelectSelectorMode.DROPDOWN,
+        ))
+
+    # ---- Schritte -----------------------------------------------------
 
     async def async_step_init(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
+        menue = ["anlage", "zone_neu"]
+        if self._zonen:
+            menue += ["zone_bearbeiten", "zone_loeschen"]
+        return self.async_show_menu(step_id="init", menu_options=menue)
+
+    async def async_step_anlage(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
         if user_input is not None:
-            return self.async_create_entry(data=_bereinige(user_input))
+            anlage = _bereinige(user_input)
+            # Optionale Felder, die geleert wurden, wirklich entfernen.
+            for key in (CONF_RESET_UHRZEIT, CONF_NOTIFY):
+                anlage.setdefault(key, None)
+            return self._speichern(anlage=anlage)
         return self.async_show_form(
-            step_id="init",
+            step_id="anlage",
             data_schema=_anlage_schema(dict(self.config_entry.options)),
         )
 
-
-class ZoneSubentryFlow(ConfigSubentryFlow):
-    """Zone hinzufügen oder bearbeiten."""
-
-    def _nr_vergeben(self, nr: int, ausser: str | None = None) -> bool:
-        for sub in self._get_entry().subentries.values():
-            if sub.subentry_type != SUBENTRY_ZONE or sub.subentry_id == ausser:
-                continue
-            if int(sub.data.get(CONF_NR, -1)) == nr:
-                return True
-        return False
-
-    def _verteiler(self) -> list[str]:
-        """Alle bereits verwendeten Verteilernamen."""
-        return sorted({
-            str(sub.data[CONF_VERTEILER])
-            for sub in self._get_entry().subentries.values()
-            if sub.subentry_type == SUBENTRY_ZONE
-            and sub.data.get(CONF_VERTEILER)
-        })
-
-    @staticmethod
-    def _titel(daten: dict[str, Any]) -> str:
-        return f"Zone {daten[CONF_NR]} {daten[CONF_NAME]}"
-
-    async def async_step_user(
+    async def async_step_zone_neu(
         self, user_input: dict[str, Any] | None = None
-    ) -> SubentryFlowResult:
+    ) -> ConfigFlowResult:
         fehler: dict[str, str] = {}
         if user_input is not None:
             daten = _bereinige(user_input)
             if self._nr_vergeben(daten[CONF_NR]):
                 fehler[CONF_NR] = "nr_vergeben"
             else:
-                return self.async_create_entry(
-                    title=self._titel(daten), data=daten
-                )
+                zonen = self._zonen
+                zonen[ulid_now()] = daten
+                return self._speichern(zonen=zonen)
         return self.async_show_form(
-            step_id="user",
+            step_id="zone_neu",
             data_schema=_zone_schema(user_input or {}, self._verteiler()),
             errors=fehler,
         )
 
-    async def async_step_reconfigure(
+    async def async_step_zone_bearbeiten(
         self, user_input: dict[str, Any] | None = None
-    ) -> SubentryFlowResult:
-        sub = self._get_reconfigure_subentry()
+    ) -> ConfigFlowResult:
+        if user_input is not None:
+            self._zone_id = user_input[CONF_ZONE_AUSWAHL]
+            return await self.async_step_zone_daten()
+        return self.async_show_form(
+            step_id="zone_bearbeiten",
+            data_schema=vol.Schema({
+                vol.Required(CONF_ZONE_AUSWAHL): self._zonen_auswahl(False),
+            }),
+        )
+
+    async def async_step_zone_daten(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        assert self._zone_id is not None
         fehler: dict[str, str] = {}
         if user_input is not None:
             daten = _bereinige(user_input)
-            if self._nr_vergeben(daten[CONF_NR], ausser=sub.subentry_id):
+            if self._nr_vergeben(daten[CONF_NR], ausser=self._zone_id):
                 fehler[CONF_NR] = "nr_vergeben"
             else:
-                return self.async_update_and_abort(
-                    self._get_entry(), sub,
-                    title=self._titel(daten), data=daten,
-                )
+                zonen = self._zonen
+                zonen[self._zone_id] = daten
+                return self._speichern(zonen=zonen)
+        werte = user_input or self._zonen.get(self._zone_id, {})
         return self.async_show_form(
-            step_id="reconfigure",
-            data_schema=_zone_schema(user_input or dict(sub.data), self._verteiler()),
+            step_id="zone_daten",
+            data_schema=_zone_schema(dict(werte), self._verteiler()),
             errors=fehler,
+            description_placeholders={"zone": zone_titel(
+                self._zonen[self._zone_id])},
+        )
+
+    async def async_step_zone_loeschen(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        if user_input is not None:
+            zonen = self._zonen
+            for zid in user_input.get(CONF_ZONE_AUSWAHL, []):
+                zonen.pop(zid, None)
+            return self._speichern(zonen=zonen)
+        return self.async_show_form(
+            step_id="zone_loeschen",
+            data_schema=vol.Schema({
+                vol.Optional(CONF_ZONE_AUSWAHL, default=[]):
+                    self._zonen_auswahl(True),
+            }),
         )

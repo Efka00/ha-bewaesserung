@@ -19,8 +19,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry,
     anlage: Anlage = entry.runtime_data
     async_add_entities([AutomatikSchalter(anlage)])
     for zone in anlage.zonen.values():
-        async_add_entities([HandstartSchalter(anlage, zone)],
-                           config_subentry_id=zone.id)
+        async_add_entities([HandstartSchalter(anlage, zone)])
 
 
 class AutomatikSchalter(AnlageEntity, SwitchEntity):

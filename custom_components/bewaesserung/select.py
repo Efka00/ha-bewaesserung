@@ -18,7 +18,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry,
                             ) -> None:
     anlage: Anlage = entry.runtime_data
     for zone in anlage.zonen.values():
-        async_add_entities([Modus(anlage, zone)], config_subentry_id=zone.id)
+        async_add_entities([Modus(anlage, zone)])
 
 
 class Modus(ZonenEntity, SelectEntity):

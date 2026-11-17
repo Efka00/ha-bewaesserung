@@ -20,8 +20,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry,
     anlage: Anlage = entry.runtime_data
     async_add_entities([AnlageLaeuft(anlage), RasenAktiv(anlage)])
     for zone in anlage.zonen.values():
-        async_add_entities([ZoneLaeuft(anlage, zone)],
-                           config_subentry_id=zone.id)
+        async_add_entities([ZoneLaeuft(anlage, zone)])
 
 
 class AnlageLaeuft(AnlageEntity, BinarySensorEntity):

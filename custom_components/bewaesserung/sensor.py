@@ -31,7 +31,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry,
             LetzteBewaesserung(anlage, zone),
             Ende(anlage, zone),
             LaeufeHeute(anlage, zone),
-        ], config_subentry_id=zone.id)
+        ])
 
 
 class AnlageStatus(AnlageEntity, SensorEntity):

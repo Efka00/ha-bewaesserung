@@ -2,7 +2,11 @@
 
 DOMAIN = "bewaesserung"
 
+# Bis 0.2.x waren Zonen Subentries dieses Typs (nur noch für die Migration).
 SUBENTRY_ZONE = "zone"
+
+# Zonen in den Optionen der Anlage: {zone_id: {...Zonendaten}}
+CONF_ZONEN = "zonen"
 
 # ---- Anlage (Options des Config-Eintrags) ---------------------------
 CONF_MAX_PARALLEL = "max_parallel"

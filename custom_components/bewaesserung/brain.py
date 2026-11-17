@@ -95,7 +95,7 @@ from .const import (
     ST_RASEN,
     ST_RUHEZEIT,
     ST_WARTET,
-    SUBENTRY_ZONE,
+    CONF_ZONEN,
     VENTIL_WEG_SEKUNDEN,
     ZONE_DEFAULTS,
     ZONE_SPEICHER_DEFAULTS,
@@ -120,10 +120,10 @@ def _uhrzeit(jetzt: datetime, text: str) -> datetime:
 class Zone:
     """Eine Bewässerungszone: Konfiguration + gespeicherter Zustand."""
 
-    def __init__(self, subentry_id: str, daten: dict[str, Any],
+    def __init__(self, zone_id: str, daten: dict[str, Any],
                  speicher: dict[str, Any]) -> None:
         d = {**ZONE_DEFAULTS, **daten}
-        self.id = subentry_id
+        self.id = zone_id
         self.nr = int(d[CONF_NR])
         self.name = str(d[CONF_NAME])
         self.ventil = str(d[CONF_VENTIL])
@@ -260,16 +260,14 @@ class Anlage:
         # Automatik startet bei einer Neuinstallation AUS.
         self.daten.setdefault("anlage", {"master": False})
         speicher = self.daten.setdefault("zonen", {})
-        for sub in self.entry.subentries.values():
-            if sub.subentry_type != SUBENTRY_ZONE:
-                continue
-            s = speicher.setdefault(sub.subentry_id, {})
+        for zone_id, zone_daten in self.entry.options.get(CONF_ZONEN, {}).items():
+            s = speicher.setdefault(zone_id, {})
             for key, wert in ZONE_SPEICHER_DEFAULTS.items():
                 s.setdefault(key, wert)
-            zone = Zone(sub.subentry_id, dict(sub.data), s)
+            zone = Zone(zone_id, dict(zone_daten), s)
             if not zone.sensor and zone.modus == MODUS_FEUCHTE:
                 s["modus"] = MODUS_ZEIT
-            self.zonen[sub.subentry_id] = zone
+            self.zonen[zone_id] = zone
         for sid in list(speicher):
             if sid not in self.zonen:
                 del speicher[sid]
