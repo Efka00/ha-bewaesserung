@@ -3,7 +3,15 @@
 ## Entscheidungen (17.11.2026, mit Martin)
 
 - **Brain und Hand kommen beide komplett in die Integration** – inkl. Watchdogs, Unavailable-Behandlung, Hardware-Abschaltung vor dem Öffnen (frei konfigurierbare Aktion je Zone), Timer, Zähler.
-- **Dry-Run** bleibt als `switch`, wird aber nur etwa einmal im Jahr genutzt → kein prominentes Bedienelement nötig.
+- ~~Dry-Run bleibt als `switch`~~ → **Dry-Run entfällt.** Der Helper war ein Test und ist seit Brain v0.8 wirkungslos.
+- **`input_boolean.bewasserung_lauft` ist toter Helper:** wird weder vom Brain noch vom Blueprint, einer Automation, einem Skript oder Dashboard gelesen/geschrieben. Steht seit dem Neustart am 07.11.2026 21:11 auf „on“ (Restore). Vermutlich Relikt des alten Bewässerungscomputers → entfällt, keine Entsprechung in der Integration.
+- **Sollwert ohne Sensor** (Zone 6) entfällt: ohne Feuchtesensor läuft eine Zone automatisch über Zeit. Der Helper existierte nur zur Vereinheitlichung.
+- **Migration: harte Umschaltung, kein Parallelbetrieb.** AppDaemon-App + Zonen-Automationen aus, Integration an. Einmalige Übernahme der „letzte Bewässerung“-Werte bleibt.
+- **Entities pro Zone:** Laufzeit, Startzeit, Modus, Sollwert (nur mit Sensor) als veränderbare Entities (`number`/`time`/`select`). Handstart als `switch` (spiegelt Laufzustand, aus = Stopp).
+- **Status/Debug:** pro Zonen-Gerät Sensoren (Zustand + Grund). Eine Markdown-Tabelle ist nicht nötig, lässt sich im Dashboard daraus bauen.
+- **Hardware-Abschaltung:** Ausnahme von der Hardwareneutralität, mit Martin abgestimmt. Ist das Ventil ein HmIP-Switch (Plattform `homematicip_local`), setzt die Integration vor dem Öffnen `switch_set_on_time` (Laufzeit + Puffer). Pro Zone abschaltbar.
+- `apps.yaml` enthält für die Bewässerung nur `module`/`class` – alle Einstellungen stehen im `CONFIG` der `.py`.
+- **Nachholaufträge** bleiben wie bisher nur im Speicher (verfallen bei Neustart, Master aus, Fensterende). Wird ggf. später noch überlegt.
 
 Aus HA ausgelesen (ha-mcp). Die AppDaemon-Quelle (`bewaesserung_allocator.py` + `apps.yaml`) liegt noch nicht vor.
 

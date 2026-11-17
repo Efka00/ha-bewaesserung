@@ -2,12 +2,13 @@
   "domain": "bewaesserung",
   "name": "Bewässerung",
   "codeowners": ["@Efka00"],
-  "config_flow": false,
+  "config_flow": true,
   "dependencies": [],
   "documentation": "https://github.com/Efka00/ha-bewaesserung",
   "integration_type": "hub",
   "iot_class": "calculated",
   "issue_tracker": "https://github.com/Efka00/ha-bewaesserung/issues",
   "requirements": [],
-  "version": "0.0.0"
+  "single_config_entry": true,
+  "version": "0.1.0"
 }
