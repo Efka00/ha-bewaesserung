@@ -1,4 +1,5 @@
-"""Zahlen je Zone: Laufzeit und Sollwert (nur mit Feuchtesensor)."""
+"""Zahlen je Zone: Laufzeit, dazu Sollwert und Wiederholungen (nur mit
+Feuchtesensor)."""
 
 from __future__ import annotations
 
@@ -19,7 +20,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry,
     for zone in anlage.zonen.values():
         entities: list[NumberEntity] = [Laufzeit(anlage, zone)]
         if zone.sensor:
-            entities.append(Sollwert(anlage, zone))
+            entities += [Sollwert(anlage, zone), Wiederholungen(anlage, zone)]
         async_add_entities(entities)
 
 
@@ -58,3 +59,19 @@ class Sollwert(_ZonenZahl):
 
     def __init__(self, anlage: Anlage, zone: Zone) -> None:
         super().__init__(anlage, zone, "sollwert", "Sollwert")
+
+
+class Wiederholungen(_ZonenZahl):
+    """Feuchtemodus: höchstens so viele automatische Läufe pro Tag."""
+
+    _key = "wiederholungen"
+    _attr_icon = "mdi:repeat"
+    _attr_native_min_value = 1
+    _attr_native_max_value = 10
+    _attr_native_step = 1
+
+    def __init__(self, anlage: Anlage, zone: Zone) -> None:
+        super().__init__(anlage, zone, "wiederholungen", "Wiederholungen")
+
+    async def async_set_native_value(self, value: float) -> None:
+        await self.anlage.async_setze_wert(self.zone, self._key, int(value))

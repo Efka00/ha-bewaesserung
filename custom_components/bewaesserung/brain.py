@@ -606,6 +606,7 @@ class Anlage:
         """Täglicher Reset: der Zähler zeigt dadurch 'Läufe heute'."""
         for zone in self.zonen.values():
             zone.s["laeufe"] = 0
+            zone.s["auto_laeufe"] = 0
         self.speichern()
         self.benachrichtigen()
         _LOGGER.info("Zonenzähler zurückgesetzt")
@@ -743,6 +744,10 @@ class Anlage:
             return self._bewerte_zeit(zone, b, jetzt)
 
         if modus == MODUS_FEUCHTE:
+            limit = int(zone.s["wiederholungen"])
+            if int(zone.s["auto_laeufe"]) >= limit:
+                return ergebnis(ST_KEIN_BEDARF,
+                                f"Tageslimit erreicht ({limit}×)")
             plausibel = (feuchte is not None
                          and SENSOR_MIN_GUELTIG <= feuchte <= SENSOR_MAX_GUELTIG)
             if not plausibel:
@@ -1013,6 +1018,10 @@ class Anlage:
         # Merken, ob von Hand gestartet: nur solche Läufe überstehen
         # das Ausschalten der Automatik.
         zone.s["per_hand"] = zone.handstart
+        # Tageslimit des Feuchtemodus: nur neue automatische Starts zählen
+        # (kein Handstart, kein Nachholen eines verdrängten Laufs).
+        if not zone.handstart and rest_minuten is None:
+            zone.s["auto_laeufe"] = int(zone.s["auto_laeufe"]) + 1
         # Handstart mitziehen: Anzeige "läuft" und zugleich Aus-Schalter.
         zone.s["handstart"] = True
         _LOGGER.info("%s freigegeben (%.0f min, Verteiler %s)", zone.titel,

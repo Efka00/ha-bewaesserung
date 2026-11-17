@@ -77,6 +77,8 @@ ZONE_SPEICHER_DEFAULTS = {
     "letzte": None,            # ISO-Zeitstempel des letzten Starts
     "letztes_ende": None,      # ISO-Zeitstempel des tatsächlichen Endes
     "laeufe": 0,
+    "auto_laeufe": 0,          # automatische Starts heute (ohne Handstart)
+    "wiederholungen": 1,       # Feuchtemodus: höchstens so viele Läufe/Tag
     "freigabe": False,
     "handstart": False,
     "per_hand": False,         # laufender Lauf wurde von Hand gestartet
