@@ -74,7 +74,8 @@
             "parallel_erlaubt": "Parallel zum Verteiler erlaubt",
             "rasen": "Rasenzone",
             "cooldown_stunden": "Eigener Cooldown",
-            "max_extern_minuten": "Maximale Laufzeit ohne Freigabe"
+            "max_extern_minuten": "Maximale Laufzeit ohne Freigabe",
+            "hmip_abschaltung": "HmIP-Selbstabschaltung setzen"
           },
           "data_description": {
             "ventil": "Ein Schalter oder Ventil. Wichtig: das Gerät braucht eine eigene Abschaltung (z. B. Tasmota PulseTime).",
@@ -85,7 +86,8 @@
             "parallel_erlaubt": "Die Zone belegt keinen Verteiler-Slot.",
             "rasen": "Verdrängt alle anderen Zonen, verdrängte Zonen holen ihre Restlaufzeit nach.",
             "cooldown_stunden": "Leer lassen für den Wert der Anlage.",
-            "max_extern_minuten": "Läuft das Ventil länger ohne Freigabe (z. B. von Hand geöffnet), wird es abgeschaltet. Muss über der längsten Laufzeit liegen."
+            "max_extern_minuten": "Läuft das Ventil länger ohne Freigabe (z. B. von Hand geöffnet), wird es abgeschaltet. Muss über der längsten Laufzeit liegen.",
+            "hmip_abschaltung": "Nur bei Homematic-IP-Ventilen: vor dem Öffnen wird ON_TIME auf Laufzeit + 5 min gesetzt, damit das Ventil auch ohne Home Assistant schließt."
           }
         },
         "reconfigure": {
@@ -101,7 +103,8 @@
             "parallel_erlaubt": "Parallel zum Verteiler erlaubt",
             "rasen": "Rasenzone",
             "cooldown_stunden": "Eigener Cooldown",
-            "max_extern_minuten": "Maximale Laufzeit ohne Freigabe"
+            "max_extern_minuten": "Maximale Laufzeit ohne Freigabe",
+            "hmip_abschaltung": "HmIP-Selbstabschaltung setzen"
           }
         }
       }

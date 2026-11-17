@@ -1,0 +1,1038 @@
+"""Brain und Hand der Bewässerung.
+
+Portierung von bewaesserung_allocator.py v1.1 (Brain) und dem Blueprint
+bewaesserung_zone.yaml (Hand). Die Trennung bleibt im Code erhalten:
+
+  Brain  = rechnet, entscheidet, setzt die Freigabe   (_zyklus_intern ...)
+  Hand   = schaltet Ventile und schützt das Gerät     (_hand_* , Watchdogs)
+
+Sicherheitsebenen (von unten nach oben)
+  Ebene 0  Hardware : Tasmota PulseTime / HmIP ON_TIME (setzt die Hand)
+  Ebene 1  Hand     : Extern-Watchdog, Unavailable-Behandlung
+  Ebene 2  Brain    : Laufzeitüberwachung, Cooldown, Fenster, Automatik
+
+Abweichungen vom AppDaemon-Original (bewusst):
+  * Freigabe, Handstart, letzte Bewässerung, Läufe und die Einstellungen
+    je Zone liegen in einem Store statt in input_*-Helfern. Die Freigabe
+    überlebt dadurch einen Neustart; die Recovery bleibt trotzdem drin.
+  * Den Timer-Helper gibt es nicht mehr: das Laufzeitende ist ein
+    geplanter Zeitpunkt, der den Zyklus auslöst.
+  * Kein Dry-Run, keine Altsystem-Sperre, keine Markdown-Tabelle.
+"""
+
+from __future__ import annotations
+
+import asyncio
+from collections.abc import Callable
+from datetime import datetime, timedelta
+from functools import partial
+import logging
+from typing import Any
+
+from homeassistant.config_entries import ConfigEntry
+from homeassistant.const import STATE_UNAVAILABLE, STATE_UNKNOWN
+from homeassistant.core import (
+    CALLBACK_TYPE,
+    Event,
+    EventStateChangedData,
+    HomeAssistant,
+    callback,
+)
+from homeassistant.exceptions import HomeAssistantError
+from homeassistant.helpers import entity_registry as er
+from homeassistant.helpers.event import (
+    async_call_later,
+    async_track_point_in_time,
+    async_track_state_change_event,
+    async_track_time_change,
+    async_track_time_interval,
+)
+from homeassistant.helpers.start import async_at_started
+from homeassistant.helpers.storage import Store
+from homeassistant.util import dt as dt_util
+
+from .const import (
+    ANLAGE_DEFAULTS,
+    CONF_BASIS_PRIO,
+    CONF_COOLDOWN,
+    CONF_COOLDOWN_ZONE,
+    CONF_EXKLUSIV,
+    CONF_FENSTER_ENDE,
+    CONF_FENSTER_HANDSTART_FREI,
+    CONF_FENSTER_HART,
+    CONF_FENSTER_START,
+    CONF_HMIP_ABSCHALTUNG,
+    CONF_MAX_EXTERN,
+    CONF_MAX_PARALLEL,
+    CONF_NAME,
+    CONF_NOTIFY,
+    CONF_NR,
+    CONF_PARALLEL_ERLAUBT,
+    CONF_RASEN,
+    CONF_RASEN_NACHLAUF,
+    CONF_RESET_UHRZEIT,
+    CONF_SENSOR,
+    CONF_START_ABSTAND,
+    CONF_VENTIL,
+    CONF_VERTEILER,
+    DOMAIN,
+    HMIP_PLATTFORM,
+    HMIP_PUFFER_SEKUNDEN,
+    MODUS_AUS,
+    MODUS_FEUCHTE,
+    MODUS_ZEIT,
+    SENSOR_MAX_GUELTIG,
+    SENSOR_MIN_GUELTIG,
+    ST_AUS,
+    ST_COOLDOWN,
+    ST_EXTERN,
+    ST_FEHLER,
+    ST_GESPERRT,
+    ST_KEIN_BEDARF,
+    ST_LAEUFT,
+    ST_NACHHOLEN,
+    ST_NACHLAUF,
+    ST_RASEN,
+    ST_RUHEZEIT,
+    ST_WARTET,
+    SUBENTRY_ZONE,
+    VENTIL_WEG_SEKUNDEN,
+    ZONE_DEFAULTS,
+    ZONE_SPEICHER_DEFAULTS,
+    ZYKLUS_SEKUNDEN,
+)
+
+_LOGGER = logging.getLogger(__name__)
+
+SPEICHER_VERSION = 1
+AN_ZUSTAENDE = ("on", "open", "opening")
+UNGUELTIG = (None, STATE_UNAVAILABLE, STATE_UNKNOWN, "")
+DIENST_TIMEOUT = 15
+
+
+def _uhrzeit(jetzt: datetime, text: str) -> datetime:
+    """'HH:MM[:SS]' als Zeitpunkt am Tag von jetzt."""
+    teile = str(text).split(":")
+    return jetzt.replace(hour=int(teile[0]), minute=int(teile[1]),
+                         second=0, microsecond=0)
+
+
+class Zone:
+    """Eine Bewässerungszone: Konfiguration + gespeicherter Zustand."""
+
+    def __init__(self, subentry_id: str, daten: dict[str, Any],
+                 speicher: dict[str, Any]) -> None:
+        d = {**ZONE_DEFAULTS, **daten}
+        self.id = subentry_id
+        self.nr = int(d[CONF_NR])
+        self.name = str(d[CONF_NAME])
+        self.ventil = str(d[CONF_VENTIL])
+        self.sensor: str | None = d.get(CONF_SENSOR) or None
+        self.verteiler = str(d.get(CONF_VERTEILER) or "")
+        self.basis_prio = float(d[CONF_BASIS_PRIO])
+        self.exklusiv = bool(d[CONF_EXKLUSIV])
+        self.parallel_erlaubt = bool(d[CONF_PARALLEL_ERLAUBT])
+        self.rasen = bool(d[CONF_RASEN])
+        self.cooldown: float | None = (
+            float(d[CONF_COOLDOWN_ZONE])
+            if d.get(CONF_COOLDOWN_ZONE) not in (None, "") else None
+        )
+        self.max_extern = int(d[CONF_MAX_EXTERN])
+        self.hmip_abschaltung = bool(d[CONF_HMIP_ABSCHALTUNG])
+
+        # Persistenter Zustand (gehört dem Store der Anlage).
+        self.s = speicher
+
+        # Ergebnis der letzten Bewertung (für die Sensoren).
+        self.zustand = ST_AUS
+        self.grund = ""
+        self.sensorfehler = False
+
+        # Geplante Rückrufe der Hand.
+        self.ende_abbruch: CALLBACK_TYPE | None = None
+        self.extern_abbruch: CALLBACK_TYPE | None = None
+        self.weg_abbruch: CALLBACK_TYPE | None = None
+
+    @property
+    def titel(self) -> str:
+        return f"Zone {self.nr} {self.name}"
+
+    # ---- gespeicherte Werte -------------------------------------------
+    @property
+    def laufzeit(self) -> float:
+        return float(self.s["laufzeit"])
+
+    @property
+    def letzte(self) -> datetime | None:
+        roh = self.s.get("letzte")
+        return dt_util.parse_datetime(roh) if roh else None
+
+    @letzte.setter
+    def letzte(self, wert: datetime | None) -> None:
+        self.s["letzte"] = wert.isoformat() if wert else None
+
+    @property
+    def freigabe(self) -> bool:
+        return bool(self.s["freigabe"])
+
+    @property
+    def handstart(self) -> bool:
+        return bool(self.s["handstart"])
+
+    @property
+    def modus(self) -> str:
+        return str(self.s["modus"])
+
+    @property
+    def ende(self) -> datetime | None:
+        """Geplantes Laufzeitende, solange die Zone freigegeben ist."""
+        start = self.letzte
+        if not self.freigabe or start is None:
+            return None
+        return start + timedelta(minutes=self.laufzeit)
+
+    def abbrechen(self) -> None:
+        for name in ("ende_abbruch", "extern_abbruch", "weg_abbruch"):
+            abbruch = getattr(self, name)
+            if abbruch:
+                abbruch()
+                setattr(self, name, None)
+
+
+class Anlage:
+    """Zentraler Verteiler (Brain) plus Ausführung (Hand)."""
+
+    def __init__(self, hass: HomeAssistant, entry: ConfigEntry) -> None:
+        self.hass = hass
+        self.entry = entry
+        self.store: Store[dict[str, Any]] = Store(
+            hass, SPEICHER_VERSION, f"{DOMAIN}.{entry.entry_id}"
+        )
+        self.daten: dict[str, Any] = {}
+        self.zonen: dict[str, Zone] = {}
+
+        self._listener: list[CALLBACK_TYPE] = []
+        self._abmelden: list[CALLBACK_TYPE] = []
+        self._start_abbruch: dict[int, CALLBACK_TYPE] = {}
+
+        self._lock = asyncio.Lock()
+        self._nochmal = False
+        self.gestartet = False
+
+        # Wie im Original: Merker, Startabstand, Rasen, Nachholaufträge.
+        self._gemeldete_fehler: set[str] = set()
+        self._geplant: set[int] = set()
+        self._naechster_startslot = dt_util.now()
+        self._rasen_frei_ab: datetime | None = None
+        self.rasen_aktiv = False
+        self._rasen_lief = False
+        # Nachholaufträge {zone_nr: Restlaufzeit in Minuten}. Bewusst nur
+        # im Speicher: verfallen bei Automatik aus, Fensterende, Neustart.
+        self.nachholen: dict[int, float] = {}
+
+        # Für die Anlagen-Sensoren.
+        self.status = "Startet"
+        self.sperre = ""
+        self.aktive = 0
+
+    # ------------------------------------------------------------------
+    #  Lebenszyklus
+    # ------------------------------------------------------------------
+
+    @property
+    def opt(self) -> dict[str, Any]:
+        return {**ANLAGE_DEFAULTS, **self.entry.options}
+
+    @property
+    def master(self) -> bool:
+        return bool(self.daten["anlage"]["master"])
+
+    @property
+    def laeufe_heute(self) -> int:
+        return sum(int(z.s["laeufe"]) for z in self.zonen.values())
+
+    def zonen_sortiert(self) -> list[Zone]:
+        return sorted(self.zonen.values(), key=lambda z: z.nr)
+
+    async def async_laden(self) -> None:
+        self.daten = await self.store.async_load() or {}
+        # Automatik startet bei einer Neuinstallation AUS.
+        self.daten.setdefault("anlage", {"master": False})
+        speicher = self.daten.setdefault("zonen", {})
+        for sub in self.entry.subentries.values():
+            if sub.subentry_type != SUBENTRY_ZONE:
+                continue
+            s = speicher.setdefault(sub.subentry_id, {})
+            for key, wert in ZONE_SPEICHER_DEFAULTS.items():
+                s.setdefault(key, wert)
+            zone = Zone(sub.subentry_id, dict(sub.data), s)
+            if not zone.sensor and zone.modus == MODUS_FEUCHTE:
+                s["modus"] = MODUS_ZEIT
+            self.zonen[sub.subentry_id] = zone
+        for sid in list(speicher):
+            if sid not in self.zonen:
+                del speicher[sid]
+        self.speichern()
+
+    @callback
+    def async_start(self) -> None:
+        ventile = list({z.ventil for z in self.zonen.values()})
+        if ventile:
+            self._abmelden.append(async_track_state_change_event(
+                self.hass, ventile, self._on_ventil))
+        reset = self.opt.get(CONF_RESET_UHRZEIT)
+        if reset:
+            teile = [int(t) for t in str(reset).split(":")] + [0, 0]
+            self._abmelden.append(async_track_time_change(
+                self.hass, self._zaehler_reset,
+                hour=teile[0], minute=teile[1], second=teile[2]))
+        self._abmelden.append(async_at_started(self.hass, self._on_ha_gestartet))
+
+    async def async_stop(self) -> None:
+        for abmelden in self._abmelden:
+            abmelden()
+        self._abmelden.clear()
+        for abbruch in self._start_abbruch.values():
+            abbruch()
+        self._start_abbruch.clear()
+        for zone in self.zonen.values():
+            zone.abbrechen()
+        await self.store.async_save(self.daten)
+
+    async def _on_ha_gestartet(self, _hass: HomeAssistant) -> None:
+        self._uebernehme_alte_helper()
+        # Wie im Original: erster Zyklus 10 s nach dem Start, damit die
+        # Ventile Zeit haben, verfügbar zu werden.
+        self._abmelden.append(
+            async_call_later(self.hass, 10, self._erster_zyklus))
+        # Extern-Watchdog auch für Ventile, die beim Start schon offen sind.
+        for zone in self.zonen.values():
+            if self._ist_an(zone.ventil):
+                self._extern_watchdog_starten(zone)
+
+    async def _erster_zyklus(self, _now: datetime) -> None:
+        self.gestartet = True
+        self._abmelden.append(async_track_time_interval(
+            self.hass, self._zyklus_takt, timedelta(seconds=ZYKLUS_SEKUNDEN)))
+        _LOGGER.info("Bewässerung gestartet (%d Zonen, Zyklus %ds)",
+                     len(self.zonen), ZYKLUS_SEKUNDEN)
+        await self.async_zyklus()
+
+    async def _zyklus_takt(self, _now: datetime) -> None:
+        await self.async_zyklus()
+
+    def speichern(self) -> None:
+        self.store.async_delay_save(lambda: self.daten, 2)
+
+    @callback
+    def async_add_listener(self, cb: CALLBACK_TYPE) -> CALLBACK_TYPE:
+        self._listener.append(cb)
+        return lambda: self._listener.remove(cb)
+
+    @callback
+    def benachrichtigen(self) -> None:
+        for cb in list(self._listener):
+            cb()
+
+    # ------------------------------------------------------------------
+    #  Bedienung über die Entities
+    # ------------------------------------------------------------------
+
+    async def async_setze_master(self, an: bool) -> None:
+        self.daten["anlage"]["master"] = an
+        self.speichern()
+        self.benachrichtigen()
+        await self.async_zyklus()
+
+    async def async_setze_handstart(self, zone: Zone, an: bool) -> None:
+        """Handbedienung soll ohne Wartezeit greifen (beide Richtungen)."""
+        zone.s["handstart"] = an
+        self.speichern()
+        self.benachrichtigen()
+        await self.async_zyklus()
+
+    async def async_setze_wert(self, zone: Zone, key: str, wert: Any) -> None:
+        zone.s[key] = wert
+        self.speichern()
+        self.benachrichtigen()
+        await self.async_zyklus()
+
+    # ------------------------------------------------------------------
+    #  Übernahme aus dem Altsystem (einmalig je Zone)
+    # ------------------------------------------------------------------
+
+    @callback
+    def _uebernehme_alte_helper(self) -> None:
+        """Werte aus den alten Helfern zone_<nr>_* übernehmen.
+
+        Läuft nur einmal je Zone. Gefunden wird über die Zonennummer im
+        Entity-Namen; fehlt ein Helfer, bleibt der Standardwert.
+        """
+        geaendert = False
+        for zone in self.zonen.values():
+            if zone.s.get("importiert"):
+                continue
+            zone.s["importiert"] = True
+            geaendert = True
+            praefix = f"zone_{zone.nr}_"
+
+            def finde(domain: str, endung: str) -> Any:
+                for st in self.hass.states.async_all(domain):
+                    if (st.object_id.startswith(praefix)
+                            and st.object_id.endswith(endung)
+                            and st.state not in UNGUELTIG):
+                        return st
+                return None
+
+            uebernommen = []
+            if st := finde("input_datetime", "_letzte_bewasserung"):
+                wert = dt_util.parse_datetime(st.state)
+                if wert is not None:
+                    if wert.tzinfo is None:
+                        wert = wert.replace(
+                            tzinfo=dt_util.get_default_time_zone())
+                    zone.letzte = wert
+                    uebernommen.append("letzte Bewässerung")
+            if st := finde("input_datetime", "_zeit"):
+                zone.s["startzeit"] = st.state
+                uebernommen.append("Startzeit")
+            if (st := finde("timer", "_timer")) and st.attributes.get("duration"):
+                teile = str(st.attributes["duration"]).split(":")
+                try:
+                    zone.s["laufzeit"] = (int(teile[0]) * 60 + int(teile[1])
+                                          + float(teile[2]) / 60.0)
+                    uebernommen.append("Laufzeit")
+                except (ValueError, IndexError):
+                    pass
+            if (st := finde("input_select", "_modus")) and st.state in (
+                    MODUS_AUS, MODUS_ZEIT, MODUS_FEUCHTE):
+                modus = st.state
+                if modus == MODUS_FEUCHTE and not zone.sensor:
+                    modus = MODUS_ZEIT
+                zone.s["modus"] = modus
+                uebernommen.append("Modus")
+            if st := finde("input_number", "_sollwert"):
+                try:
+                    zone.s["sollwert"] = float(st.state)
+                    uebernommen.append("Sollwert")
+                except ValueError:
+                    pass
+            if uebernommen:
+                _LOGGER.info("%s: aus Altsystem übernommen: %s",
+                             zone.titel, ", ".join(uebernommen))
+        if geaendert:
+            self.speichern()
+            self.benachrichtigen()
+
+    # ------------------------------------------------------------------
+    #  Hilfsfunktionen für defensive Zustandslesung
+    # ------------------------------------------------------------------
+
+    def _zustand(self, entity_id: str | None) -> str | None:
+        if not entity_id:
+            return None
+        st = self.hass.states.get(entity_id)
+        return st.state if st else None
+
+    def _ist_an(self, entity_id: str) -> bool:
+        return self._zustand(entity_id) in AN_ZUSTAENDE
+
+    def _ist_verfuegbar(self, entity_id: str) -> bool:
+        """Unavailable ist NICHT gleich aus.
+
+        Ein Relais behält seinen Zustand, wenn das Gerät vom Netz geht.
+        """
+        return self._zustand(entity_id) not in UNGUELTIG
+
+    def _zahl(self, entity_id: str | None) -> float | None:
+        """Zahl lesen, nie auf 0 zurückfallen."""
+        roh = self._zustand(entity_id)
+        if roh in UNGUELTIG:
+            return None
+        try:
+            return float(roh)  # type: ignore[arg-type]
+        except (ValueError, TypeError):
+            _LOGGER.warning("Unerwarteter Wert bei %s: %r", entity_id, roh)
+            return None
+
+    def _melde(self, schluessel: str, text: str) -> None:
+        """Push-Nachricht, aber jede Fehlerursache nur einmal."""
+        if schluessel in self._gemeldete_fehler:
+            return
+        self._gemeldete_fehler.add(schluessel)
+        _LOGGER.warning("%s", text)
+        dienst = str(self.opt.get(CONF_NOTIFY) or "").strip().replace("/", ".")
+        if "." not in dienst:
+            return
+        domain, service = dienst.split(".", 1)
+        self.hass.async_create_task(self._dienst(
+            domain, service, {"title": "Bewässerung", "message": text}))
+
+    def _fehler_quittieren(self, schluessel: str) -> None:
+        self._gemeldete_fehler.discard(schluessel)
+
+    async def _dienst(self, domain: str, service: str,
+                      daten: dict[str, Any]) -> bool:
+        try:
+            await asyncio.wait_for(self.hass.services.async_call(
+                domain, service, daten, blocking=True), DIENST_TIMEOUT)
+        except (HomeAssistantError, TimeoutError, ValueError) as err:
+            _LOGGER.warning("Aufruf %s.%s fehlgeschlagen: %s",
+                            domain, service, err)
+            return False
+        return True
+
+    # ------------------------------------------------------------------
+    #  Hand: Ventil schalten und schützen
+    # ------------------------------------------------------------------
+
+    def _ist_hmip(self, entity_id: str) -> bool:
+        eintrag = er.async_get(self.hass).async_get(entity_id)
+        return eintrag is not None and eintrag.platform == HMIP_PLATTFORM
+
+    async def _ventil(self, zone: Zone, an: bool) -> bool:
+        domain = zone.ventil.split(".", 1)[0]
+        if domain == "valve":
+            service = "open_valve" if an else "close_valve"
+        else:
+            domain, service = "switch", ("turn_on" if an else "turn_off")
+        return await self._dienst(domain, service, {"entity_id": zone.ventil})
+
+    def _ende_planen(self, zone: Zone) -> None:
+        """Ersetzt den Timer-Helper: am Laufzeitende einen Zyklus auslösen."""
+        if zone.ende_abbruch:
+            zone.ende_abbruch()
+            zone.ende_abbruch = None
+        ende = zone.ende
+        if ende is None:
+            return
+
+        async def _abgelaufen(_now: datetime) -> None:
+            zone.ende_abbruch = None
+            await self.async_zyklus()
+
+        zone.ende_abbruch = async_track_point_in_time(
+            self.hass, _abgelaufen, ende)
+
+    async def _hand_ein(self, zone: Zone) -> None:
+        """Zone starten – Brain hat freigegeben."""
+        # Nur öffnen, wenn das Ventil erreichbar ist.
+        if not self._ist_verfuegbar(zone.ventil):
+            return
+        # Erst der Fallschirm, dann springen: Hardware-Abschaltung setzen.
+        ende = zone.ende
+        if zone.hmip_abschaltung and ende and self._ist_hmip(zone.ventil):
+            rest = (ende - dt_util.now()).total_seconds()
+            on_time = max(60, int(rest) + HMIP_PUFFER_SEKUNDEN)
+            await self._dienst(HMIP_PLATTFORM, "switch_set_on_time",
+                               {"entity_id": zone.ventil, "on_time": on_time})
+        await self._ventil(zone, True)
+        zone.s["laeufe"] = int(zone.s["laeufe"]) + 1
+        self._ende_planen(zone)
+
+    async def _hand_aus(self, zone: Zone) -> None:
+        """Zone beenden – Freigabe wurde zurückgezogen."""
+        if zone.ende_abbruch:
+            zone.ende_abbruch()
+            zone.ende_abbruch = None
+        if self._ist_verfuegbar(zone.ventil):
+            await self._ventil(zone, False)
+
+    @callback
+    def _on_ventil(self, event: Event[EventStateChangedData]) -> None:
+        entity_id = event.data["entity_id"]
+        neu = event.data["new_state"]
+        alt = event.data["old_state"]
+        neu_an = neu is not None and neu.state in AN_ZUSTAENDE
+        alt_an = alt is not None and alt.state in AN_ZUSTAENDE
+        for zone in self.zonen.values():
+            if zone.ventil != entity_id:
+                continue
+            # Extern-Watchdog: läuft das Ventil zu lange ohne Freigabe?
+            if neu_an and not alt_an:
+                self._extern_watchdog_starten(zone)
+            elif not neu_an and zone.extern_abbruch:
+                zone.extern_abbruch()
+                zone.extern_abbruch = None
+            # Ventil verschwindet (WLAN weg, Gerät überhitzt, Strom weg).
+            if neu is not None and neu.state == STATE_UNAVAILABLE:
+                if zone.weg_abbruch is None:
+                    zone.weg_abbruch = async_call_later(
+                        self.hass, VENTIL_WEG_SEKUNDEN,
+                        partial(self._ventil_weg, zone))
+            elif zone.weg_abbruch:
+                zone.weg_abbruch()
+                zone.weg_abbruch = None
+        self.benachrichtigen()
+
+    def _extern_watchdog_starten(self, zone: Zone) -> None:
+        if zone.extern_abbruch:
+            zone.extern_abbruch()
+        zone.extern_abbruch = async_call_later(
+            self.hass, zone.max_extern * 60,
+            partial(self._extern_pruefen, zone))
+
+    async def _extern_pruefen(self, zone: Zone, _now: datetime) -> None:
+        """Watchdog: Ventil läuft zu lange ohne Freigabe -> abschalten."""
+        zone.extern_abbruch = None
+        if zone.freigabe or not self._ist_an(zone.ventil):
+            return
+        await self._ventil(zone, False)
+        text = (f"{zone.titel}: Ventil lief länger als {zone.max_extern} min "
+                "ohne Freigabe und wurde abgeschaltet.")
+        _LOGGER.warning("%s", text)
+        self._gemeldete_fehler.discard(f"extern_{zone.nr}")
+        self._melde(f"extern_{zone.nr}", text)
+
+    async def _ventil_weg(self, zone: Zone, _now: datetime) -> None:
+        zone.weg_abbruch = None
+        if zone.ende_abbruch:
+            zone.ende_abbruch()
+            zone.ende_abbruch = None
+        self._melde(f"ventil_{zone.nr}",
+                    f"{zone.titel}: Ventil {zone.ventil} nicht erreichbar.")
+
+    @callback
+    def _zaehler_reset(self, _now: datetime) -> None:
+        """Täglicher Reset: der Zähler zeigt dadurch 'Läufe heute'."""
+        for zone in self.zonen.values():
+            zone.s["laeufe"] = 0
+        self.speichern()
+        self.benachrichtigen()
+        _LOGGER.info("Zonenzähler zurückgesetzt")
+
+    # ------------------------------------------------------------------
+    #  Brain: Bedarfsermittlung je Zone
+    # ------------------------------------------------------------------
+
+    def _fenster_pruefen(self, zone: Zone, jetzt: datetime) -> str | None:
+        """Ruhezeitfenster: None = Start erlaubt, sonst Klartextgrund.
+
+        Nur Startsperre, keine globale Sperre: eine laufende Zone wird
+        nicht mitten im Lauf abgewürgt.
+        """
+        start_txt = self.opt.get(CONF_FENSTER_START)
+        ende_txt = self.opt.get(CONF_FENSTER_ENDE)
+        if not start_txt or not ende_txt:
+            return None
+        fenster_auf = _uhrzeit(jetzt, start_txt)
+        fenster_zu = _uhrzeit(jetzt, ende_txt)
+        if jetzt < fenster_auf:
+            return f"Ruhezeit, Start ab {start_txt[:5]}"
+        if jetzt >= fenster_zu:
+            return f"Ruhezeit ab {ende_txt[:5]}"
+        if self.opt.get(CONF_FENSTER_HART):
+            if jetzt + timedelta(minutes=zone.laufzeit) > fenster_zu:
+                return f"Laufzeit passt nicht mehr vor {ende_txt[:5]}"
+        return None
+
+    def _bewerte_zone(self, zone: Zone, jetzt: datetime) -> dict[str, Any]:
+        """Ermittelt Zustand, Bedarf und Priorität einer Zone."""
+        feuchte = self._zahl(zone.sensor)
+        sollwert = float(zone.s["sollwert"]) if zone.sensor else None
+        modus = zone.modus
+        b: dict[str, Any] = {
+            "zone": zone, "zustand": ST_KEIN_BEDARF, "grund": "",
+            "bedarf": False, "prio": 0.0, "laeuft": zone.freigabe,
+            "sensorfehler": False, "recovery": False,
+        }
+
+        def ergebnis(zustand: str, grund: str, bedarf: bool = False,
+                     prio: float = 0.0) -> dict[str, Any]:
+            b.update(zustand=zustand, grund=grund, bedarf=bedarf, prio=prio)
+            return b
+
+        # --- Ventil erreichbar? ---------------------------------------
+        if not self._ist_verfuegbar(zone.ventil):
+            self._melde(f"ventil_{zone.nr}",
+                        f"{zone.titel}: Ventil {zone.ventil} nicht "
+                        "erreichbar. Zone wird nicht gestartet.")
+            return ergebnis(ST_FEHLER, "Ventil nicht erreichbar")
+        self._fehler_quittieren(f"ventil_{zone.nr}")
+
+        # --- Hand-Erkennung und Recovery -------------------------------
+        if self._ist_an(zone.ventil) and not zone.freigabe:
+            start = zone.letzte
+            rest_sekunden = 0.0
+            if start is not None:
+                ende = start + timedelta(minutes=zone.laufzeit)
+                rest_sekunden = (ende - jetzt).total_seconds()
+            # 60-s-Schwelle gegen Fehl-Recovery zwischen Freigabe-Ende
+            # und dem tatsächlichen Schließen.
+            if zone.handstart and rest_sekunden > 60:
+                b["recovery"] = True
+                return ergebnis(ST_LAEUFT,
+                                f"übernommen, noch {rest_sekunden / 60:.0f} min",
+                                True, 10000.0)
+            return ergebnis(ST_EXTERN, "Von Hand geschaltet")
+
+        # --- Laufende Zone: Stoppwunsch und Laufzeit prüfen -----------
+        if zone.freigabe:
+            if not zone.handstart:
+                return ergebnis(ST_KEIN_BEDARF, "Von Hand gestoppt")
+            start = zone.letzte
+            if start is None:
+                return ergebnis(ST_FEHLER, "Startzeit unbekannt, wird beendet")
+            ende = start + timedelta(minutes=zone.laufzeit)
+            if jetzt >= ende:
+                return ergebnis(ST_KEIN_BEDARF, "Laufzeit erreicht")
+            rest = (ende - jetzt).total_seconds() / 60.0
+            # Höchste Priorität gegen Flattern zwischen zwei Zonen.
+            return ergebnis(ST_LAEUFT, f"noch {rest:.0f} min", True, 10000.0)
+
+        # --- Rasensperre ----------------------------------------------
+        if not zone.rasen:
+            if self.rasen_aktiv:
+                return ergebnis(ST_RASEN, "gesperrt, Rasen läuft")
+            if self._rasen_frei_ab is not None and jetzt < self._rasen_frei_ab:
+                rest = (self._rasen_frei_ab - jetzt).total_seconds()
+                return ergebnis(ST_NACHLAUF, f"noch {rest:.0f}s nach Rasen")
+
+        # --- Nachholauftrag (vor dem Cooldown) -------------------------
+        if zone.nr in self.nachholen:
+            return ergebnis(ST_NACHHOLEN,
+                            f"{self.nachholen[zone.nr]:.0f} min Restzeit",
+                            True, 7000.0 + zone.basis_prio)
+
+        # --- Handstart: Vorrang vor allem, auch vor dem Cooldown -------
+        if zone.handstart:
+            if not self.opt.get(CONF_FENSTER_HANDSTART_FREI):
+                sperrgrund = self._fenster_pruefen(zone, jetzt)
+                if sperrgrund:
+                    return ergebnis(ST_RUHEZEIT, sperrgrund)
+            return ergebnis(ST_WARTET, "Handstart", True,
+                            5000.0 + zone.basis_prio)
+
+        # --- Ruhezeitfenster ------------------------------------------
+        sperrgrund = self._fenster_pruefen(zone, jetzt)
+        if sperrgrund:
+            return ergebnis(ST_RUHEZEIT, sperrgrund)
+
+        # --- Modus "Aus" ----------------------------------------------
+        if modus == MODUS_AUS:
+            return ergebnis(ST_AUS, "Modus Aus")
+
+        # --- Cooldown -------------------------------------------------
+        cooldown = (zone.cooldown if zone.cooldown is not None
+                    else float(self.opt[CONF_COOLDOWN]))
+        start = zone.letzte
+        if start is not None:
+            frei_ab = (start + timedelta(minutes=zone.laufzeit)
+                       + timedelta(hours=cooldown))
+            if jetzt < frei_ab:
+                rest = (frei_ab - jetzt).total_seconds() / 60.0
+                return ergebnis(ST_COOLDOWN, f"noch {rest:.0f} min gesperrt")
+
+        # --- Feuchtigkeitssteuerung ------------------------------------
+        if modus == MODUS_FEUCHTE and (zone.rasen or not zone.sensor):
+            return self._bewerte_zeit(zone, b, jetzt)
+
+        if modus == MODUS_FEUCHTE:
+            plausibel = (feuchte is not None
+                         and SENSOR_MIN_GUELTIG <= feuchte <= SENSOR_MAX_GUELTIG)
+            if not plausibel:
+                # Rückfall auf Zeitsteuerung statt Zone zu sperren.
+                b["sensorfehler"] = True
+                self._melde(f"sensor_{zone.nr}",
+                            f"{zone.titel}: Sensor unplausibel ({feuchte}). "
+                            "Zone läuft vorerst über Zeitsteuerung.")
+                return self._bewerte_zeit(zone, b, jetzt, "Sensorfehler, ")
+            self._fehler_quittieren(f"sensor_{zone.nr}")
+            assert feuchte is not None and sollwert is not None
+            if feuchte >= sollwert:
+                return ergebnis(ST_KEIN_BEDARF,
+                                f"{feuchte:.0f}% >= {sollwert:.0f}%")
+            # Relative Abweichung: Zonen mit verschiedenen Sollwerten
+            # werden dadurch vergleichbar.
+            abweichung = (sollwert - feuchte) / sollwert
+            return ergebnis(ST_WARTET,
+                            f"{feuchte:.0f}% < {sollwert:.0f}% "
+                            f"({abweichung * 100:.0f}% zu trocken)",
+                            True, 100.0 + abweichung * 1000.0)
+
+        # --- Zeitsteuerung ---------------------------------------------
+        if modus == MODUS_ZEIT:
+            return self._bewerte_zeit(zone, b, jetzt)
+
+        return ergebnis(ST_AUS, f"Unbekannter Modus: {modus}")
+
+    def _bewerte_zeit(self, zone: Zone, b: dict[str, Any], jetzt: datetime,
+                      zusatz: str = "") -> dict[str, Any]:
+        """Zeitsteuerung: einmal täglich ab der eingestellten Uhrzeit."""
+        try:
+            startzeit = _uhrzeit(jetzt, zone.s["startzeit"])
+        except (ValueError, IndexError, TypeError):
+            b.update(zustand=ST_FEHLER, grund=zusatz + "Startzeit unlesbar")
+            return b
+        if jetzt < startzeit:
+            b.update(zustand=ST_KEIN_BEDARF,
+                     grund=zusatz + f"Start um {startzeit:%H:%M}")
+            return b
+        letzte = zone.letzte
+        if letzte is not None and dt_util.as_local(letzte).date() == jetzt.date():
+            b.update(zustand=ST_KEIN_BEDARF,
+                     grund=zusatz + "heute bereits gelaufen")
+            return b
+        b.update(zustand=ST_WARTET, grund=zusatz + f"Zeitstart {startzeit:%H:%M}",
+                 bedarf=True, prio=zone.basis_prio)
+        return b
+
+    # ------------------------------------------------------------------
+    #  Brain: Hauptzyklus
+    # ------------------------------------------------------------------
+
+    async def async_zyklus(self) -> None:
+        """Ein Zyklus zur Zeit. Wird er währenddessen erneut angestoßen,
+        läuft direkt danach noch einer (statt den Anstoß zu verlieren)."""
+        if not self.gestartet:
+            return
+        if self._lock.locked():
+            self._nochmal = True
+            return
+        async with self._lock:
+            while True:
+                self._nochmal = False
+                try:
+                    await self._zyklus_intern()
+                except Exception:
+                    _LOGGER.exception("Fehler im Bewässerungszyklus")
+                if not self._nochmal:
+                    break
+            self.speichern()
+        self.benachrichtigen()
+
+    async def _zyklus_intern(self) -> None:
+        jetzt = dt_util.now()
+        zonen = self.zonen_sortiert()
+
+        # --- Globale Sperre: alles abschalten -------------------------
+        if not self.master:
+            sperre = "Automatik aus"
+            if self.nachholen:
+                _LOGGER.info("%d Nachholaufträge verworfen (%s)",
+                             len(self.nachholen), sperre)
+                self.nachholen = {}
+            for zone in zonen:
+                if zone.freigabe:
+                    await self._freigabe_aus(zone, sperre)
+                zone.zustand, zone.grund, zone.sensorfehler = (
+                    ST_GESPERRT, sperre, False)
+            self._status(sperre)
+            return
+
+        # --- Nachholaufträge nach Fensterende verwerfen ----------------
+        ende_txt = self.opt.get(CONF_FENSTER_ENDE)
+        if self.nachholen and ende_txt and jetzt >= _uhrzeit(jetzt, ende_txt):
+            _LOGGER.info("%d Nachholaufträge verworfen (Ruhezeit erreicht)",
+                         len(self.nachholen))
+            self.nachholen = {}
+
+        # --- Rasenvorrang (vor der Bewertung) --------------------------
+        # Aktiv schon, wenn der Handstart gedrückt ist – sonst könnte im
+        # selben Zyklus noch eine Gartenzone aufmachen.
+        self.rasen_aktiv = any(
+            z.rasen and (z.freigabe or z.handstart or self._ist_an(z.ventil))
+            for z in zonen)
+        if self.rasen_aktiv:
+            self._rasen_frei_ab = None
+            await self._verdraenge_garten(jetzt)
+        elif self._rasen_frei_ab is None and self._rasen_lief:
+            sekunden = int(self.opt[CONF_RASEN_NACHLAUF])
+            self._rasen_frei_ab = jetzt + timedelta(seconds=sekunden)
+            _LOGGER.info("Rasen beendet, Gartenzonen gesperrt für %ss", sekunden)
+        self._rasen_lief = self.rasen_aktiv
+
+        # --- Alle Zonen bewerten ---------------------------------------
+        bewertungen = [self._bewerte_zone(z, jetzt) for z in zonen]
+
+        # --- Unterbrochene Läufe übernehmen ----------------------------
+        for b in bewertungen:
+            if b["recovery"]:
+                await self._uebernehme(b["zone"])
+
+        # --- Bereits eingeplante Starts belegen ihren Slot -------------
+        for b in bewertungen:
+            if b["zone"].nr in self._geplant:
+                b.update(zustand=ST_LAEUFT, grund="Start in Kürze (Startabstand)",
+                         bedarf=False)
+
+        # --- Slotvergabe -----------------------------------------------
+        max_parallel = int(self.opt[CONF_MAX_PARALLEL])
+        belegte_verteiler: set[str] = set()
+        anzahl_aktiv = 0
+        exklusiv_aktiv = False
+        for b in bewertungen:
+            if b["zustand"] in (ST_LAEUFT, ST_EXTERN):
+                z = b["zone"]
+                if z.exklusiv:
+                    exklusiv_aktiv = True
+                elif not z.parallel_erlaubt:
+                    belegte_verteiler.add(z.verteiler)
+                anzahl_aktiv += 1
+
+        kandidaten = [b for b in bewertungen
+                      if b["bedarf"] and b["zustand"] in (ST_WARTET, ST_NACHHOLEN)]
+        kandidaten.sort(key=lambda b: b["prio"], reverse=True)
+
+        for b in kandidaten:
+            z = b["zone"]
+            if exklusiv_aktiv:
+                b["grund"] = "exklusive Zone läuft"
+                continue
+            if z.exklusiv:
+                if anzahl_aktiv > 0:
+                    b["grund"] = "wartet auf freies Netz (exklusiv)"
+                    continue
+                b.update(zustand=ST_LAEUFT, grund="Start (exklusiv)")
+                exklusiv_aktiv = True
+                anzahl_aktiv += 1
+                await self._plane_start(z, jetzt, self.nachholen.pop(z.nr, None))
+                continue
+            if anzahl_aktiv >= max_parallel:
+                b["grund"] = f"Limit {max_parallel} erreicht"
+                continue
+            if not z.parallel_erlaubt and z.verteiler in belegte_verteiler:
+                b["grund"] = f"Verteiler {z.verteiler} belegt"
+                continue
+            b.update(zustand=ST_LAEUFT, grund="Start")
+            if not z.parallel_erlaubt:
+                belegte_verteiler.add(z.verteiler)
+            anzahl_aktiv += 1
+            await self._plane_start(z, jetzt, self.nachholen.pop(z.nr, None))
+
+        # --- Zonen ohne Bedarf abschalten -------------------------------
+        for b in bewertungen:
+            if b["zustand"] not in (ST_LAEUFT, ST_EXTERN) and b["laeuft"]:
+                await self._beende(b["zone"], b["grund"])
+
+        # --- Laufende Zonen: Laufzeitende sicher eingeplant ------------
+        for z in zonen:
+            if z.freigabe and z.ende_abbruch is None:
+                self._ende_planen(z)
+
+        for b in bewertungen:
+            z = b["zone"]
+            z.zustand, z.grund, z.sensorfehler = (
+                b["zustand"], b["grund"], b["sensorfehler"])
+        self._status(None)
+
+    # ------------------------------------------------------------------
+    #  Brain: Aktionen
+    # ------------------------------------------------------------------
+
+    async def _uebernehme(self, zone: Zone) -> None:
+        """Freigabe für einen unterbrochenen Lauf wiederherstellen.
+
+        Der Startzeitpunkt bleibt – die Zone läuft ihre ursprüngliche
+        Restlaufzeit zu Ende. Das Ventil ist bereits offen.
+        """
+        zone.s["freigabe"] = True
+        self._ende_planen(zone)
+        _LOGGER.info("%s: unterbrochener Lauf übernommen", zone.titel)
+
+    async def _verdraenge_garten(self, jetzt: datetime) -> None:
+        """Laufende Gartenzonen abschalten, Restlaufzeit merken."""
+        for zone in self.zonen_sortiert():
+            if zone.rasen or not zone.freigabe:
+                continue
+            ende = zone.ende
+            rest = (ende - jetzt).total_seconds() / 60.0 if ende else 0.0
+            if rest >= 1.0:
+                self.nachholen[zone.nr] = rest
+                _LOGGER.info("%s vom Rasen verdrängt, %.0f min werden "
+                             "nachgeholt", zone.titel, rest)
+            else:
+                _LOGGER.info("%s vom Rasen verdrängt, war fast fertig",
+                             zone.titel)
+            await self._beende(zone, "Rasen hat Vorrang")
+
+    async def _plane_start(self, zone: Zone, jetzt: datetime,
+                           rest_minuten: float | None = None) -> None:
+        """Sofort starten oder in den Startabstand einreihen."""
+        abstand = int(self.opt[CONF_START_ABSTAND])
+        if not abstand:
+            await self._starte(zone, jetzt, rest_minuten)
+            return
+        verzoegerung = (self._naechster_startslot - jetzt).total_seconds()
+        self._naechster_startslot = (max(self._naechster_startslot, jetzt)
+                                     + timedelta(seconds=abstand))
+        if verzoegerung <= 0:
+            await self._starte(zone, jetzt, rest_minuten)
+            return
+        self._geplant.add(zone.nr)
+        _LOGGER.info("%s: Start in %.0fs (Startabstand)", zone.titel,
+                     verzoegerung)
+        self._start_abbruch[zone.nr] = async_call_later(
+            self.hass, verzoegerung,
+            partial(self._starte_verzoegert, zone.id, rest_minuten))
+
+    async def _starte_verzoegert(self, zone_id: str, rest_minuten: float | None,
+                                 _now: datetime) -> None:
+        """Eingeplanten Start ausführen, harte Voraussetzungen neu prüfen."""
+        zone = self.zonen.get(zone_id)
+        if zone is None:
+            return
+        self._start_abbruch.pop(zone.nr, None)
+        async with self._lock:
+            self._geplant.discard(zone.nr)
+            if not self.master:
+                _LOGGER.info("%s: geplanter Start verworfen (Sperre)", zone.titel)
+            elif not self._ist_verfuegbar(zone.ventil):
+                _LOGGER.info("%s: geplanter Start verworfen (Ventil nicht "
+                             "erreichbar)", zone.titel)
+            elif self.rasen_aktiv and not zone.rasen:
+                _LOGGER.info("%s: geplanter Start verworfen (Rasen hat "
+                             "Vorrang)", zone.titel)
+            elif not zone.freigabe:
+                await self._starte(zone, dt_util.now(), rest_minuten)
+            self.speichern()
+        self.benachrichtigen()
+
+    async def _starte(self, zone: Zone, jetzt: datetime,
+                      rest_minuten: float | None = None) -> None:
+        """Freigabe erteilen und Startzeitpunkt festhalten.
+
+        Nachholauftrag: Startzeitpunkt künstlich zurückdatiert, sodass
+        die normale Laufzeitrechnung genau die Restzeit übrig lässt.
+        """
+        if rest_minuten is not None:
+            versatz = zone.laufzeit - rest_minuten
+            if versatz > 0:
+                jetzt = jetzt - timedelta(minutes=versatz)
+        zone.letzte = jetzt
+        zone.s["freigabe"] = True
+        # Handstart mitziehen: Anzeige "läuft" und zugleich Aus-Schalter.
+        zone.s["handstart"] = True
+        _LOGGER.info("%s freigegeben (%.0f min, Verteiler %s)", zone.titel,
+                     zone.laufzeit, zone.verteiler)
+        await self._hand_ein(zone)
+
+    async def _freigabe_aus(self, zone: Zone, grund: str) -> None:
+        """Freigabe zurückziehen, Handstart unverändert (globale Sperre)."""
+        zone.s["freigabe"] = False
+        await self._hand_aus(zone)
+        _LOGGER.info("%s beendet (%s)", zone.titel, grund)
+
+    async def _beende(self, zone: Zone, grund: str = "") -> None:
+        """Freigabe und Handstart zurücksetzen.
+
+        Bleibt der Handstart stehen, würde die Zone im nächsten Zyklus
+        sofort erneut als Handstart gewertet.
+        """
+        zone.s["handstart"] = False
+        await self._freigabe_aus(zone, grund)
+
+    # ------------------------------------------------------------------
+    #  Statusausgabe
+    # ------------------------------------------------------------------
+
+    def _status(self, sperre: str | None) -> None:
+        self.aktive = sum(
+            1 for z in self.zonen.values() if z.zustand in (ST_LAEUFT, ST_EXTERN))
+        self.sperre = sperre or ""
+        if sperre:
+            self.status = f"Gesperrt: {sperre}"
+        elif self.rasen_aktiv:
+            self.status = f"Rasen läuft ({self.aktive} aktiv)"
+        else:
+            self.status = f"{self.aktive} aktiv"

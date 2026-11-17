@@ -49,6 +49,7 @@ CONF_RASEN = "rasen"
 CONF_BASIS_PRIO = "basis_prio"
 CONF_COOLDOWN_ZONE = "cooldown_stunden"
 CONF_MAX_EXTERN = "max_extern_minuten"
+CONF_HMIP_ABSCHALTUNG = "hmip_abschaltung"
 
 ZONE_DEFAULTS = {
     CONF_EXKLUSIV: False,
@@ -56,4 +57,43 @@ ZONE_DEFAULTS = {
     CONF_RASEN: False,
     CONF_BASIS_PRIO: 50,
     CONF_MAX_EXTERN: 30,
+    CONF_HMIP_ABSCHALTUNG: True,
 }
+
+# ---- Laufzeitwerte einer Zone (gespeichert, über Entities änderbar) --
+MODUS_AUS = "Aus"
+MODUS_ZEIT = "Zeit"
+MODUS_FEUCHTE = "Feuchtigkeit"
+
+ZONE_SPEICHER_DEFAULTS = {
+    "laufzeit": 10.0,          # Minuten (Fallback des Brain v1.1)
+    "startzeit": "08:00:00",
+    "modus": MODUS_AUS,
+    "sollwert": 35.0,
+    "letzte": None,            # ISO-Zeitstempel des letzten Starts
+    "laeufe": 0,
+    "freigabe": False,
+    "handstart": False,
+    "importiert": False,
+}
+
+# HmIP: Plattform und Puffer der Selbstabschaltung (on_time = Rest + Puffer)
+HMIP_PLATTFORM = "homematicip_local"
+HMIP_PUFFER_SEKUNDEN = 300
+
+# Ventil gilt als unerreichbar, wenn es so lange unavailable ist.
+VENTIL_WEG_SEKUNDEN = 30
+
+# ---- Zustände für die Statusanzeige ----------------------------------
+ST_AUS = "Aus"
+ST_GESPERRT = "Gesperrt"
+ST_COOLDOWN = "Cooldown"
+ST_RUHEZEIT = "Ruhezeit"
+ST_KEIN_BEDARF = "Kein Bedarf"
+ST_WARTET = "Wartet"
+ST_LAEUFT = "Läuft"
+ST_FEHLER = "Fehler"
+ST_EXTERN = "Läuft extern"
+ST_RASEN = "Rasen läuft"
+ST_NACHLAUF = "Nachlauf"
+ST_NACHHOLEN = "Nachholen"

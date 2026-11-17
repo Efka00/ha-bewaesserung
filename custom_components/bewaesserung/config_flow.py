@@ -27,6 +27,7 @@ from .const import (
     CONF_FENSTER_HANDSTART_FREI,
     CONF_FENSTER_HART,
     CONF_FENSTER_START,
+    CONF_HMIP_ABSCHALTUNG,
     CONF_MAX_EXTERN,
     CONF_MAX_PARALLEL,
     CONF_NAME,
@@ -131,6 +132,8 @@ def _zone_schema(werte: dict[str, Any], verteiler: list[str]) -> vol.Schema:
         _optional(CONF_COOLDOWN_ZONE, w): _zahl(0, 48, 0.25, "h"),
         vol.Required(CONF_MAX_EXTERN, default=w[CONF_MAX_EXTERN]):
             _zahl(1, 600, 1, "min"),
+        vol.Required(CONF_HMIP_ABSCHALTUNG, default=w[CONF_HMIP_ABSCHALTUNG]):
+            selector.BooleanSelector(),
     }
     return vol.Schema(felder)
 
