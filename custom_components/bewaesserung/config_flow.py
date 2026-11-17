@@ -50,13 +50,15 @@ from .const import (
 
 def _zahl(minimum: float, maximum: float, schritt: float = 1,
           einheit: str | None = None) -> selector.NumberSelector:
-    return selector.NumberSelector(
-        selector.NumberSelectorConfig(
-            min=minimum, max=maximum, step=schritt,
-            unit_of_measurement=einheit,
-            mode=selector.NumberSelectorMode.BOX,
-        )
+    konfig = selector.NumberSelectorConfig(
+        min=minimum, max=maximum, step=schritt,
+        mode=selector.NumberSelectorMode.BOX,
     )
+    # unit_of_measurement=None ist ungültig (vol.Invalid -> HTTP 400),
+    # deshalb nur setzen, wenn es eine Einheit gibt.
+    if einheit:
+        konfig["unit_of_measurement"] = einheit
+    return selector.NumberSelector(konfig)
 
 
 def _optional(key: str, werte: dict[str, Any]) -> vol.Optional:
