@@ -5,8 +5,10 @@ from __future__ import annotations
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers import device_registry as dr
 
 from .brain import Anlage
+from .const import DOMAIN
 
 PLATFORMS: list[Platform] = [
     Platform.BINARY_SENSOR,
@@ -25,6 +27,16 @@ async def async_setup_entry(hass: HomeAssistant,
     """Anlage einrichten."""
     anlage = Anlage(hass, entry)
     await anlage.async_laden()
+    # Anlagen-Gerät vorab anlegen: die Zonen-Geräte verweisen per
+    # via_device_id darauf.
+    geraet = dr.async_get(hass).async_get_or_create(
+        config_entry_id=entry.entry_id,
+        identifiers={(DOMAIN, entry.entry_id)},
+        name="Bewässerung",
+        manufacturer="ha-bewaesserung",
+        model="Anlage",
+    )
+    anlage.geraet_id = geraet.id
     entry.runtime_data = anlage
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     anlage.async_start()

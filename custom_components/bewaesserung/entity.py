@@ -44,5 +44,5 @@ class ZonenEntity(AnlageEntity):
             name=zone.titel,
             manufacturer="ha-bewaesserung",
             model="Zone",
-            via_device=(DOMAIN, anlage.entry.entry_id),
+            via_device_id=anlage.geraet_id,
         )

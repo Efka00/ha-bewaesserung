@@ -210,6 +210,7 @@ class Anlage:
         )
         self.daten: dict[str, Any] = {}
         self.zonen: dict[str, Zone] = {}
+        self.geraet_id: str | None = None
 
         self._listener: list[CALLBACK_TYPE] = []
         self._abmelden: list[CALLBACK_TYPE] = []
@@ -580,7 +581,6 @@ class Anlage:
         await self._ventil(zone, False)
         text = (f"{zone.titel}: Ventil lief länger als {zone.max_extern} min "
                 "ohne Freigabe und wurde abgeschaltet.")
-        _LOGGER.warning("%s", text)
         self._gemeldete_fehler.discard(f"extern_{zone.nr}")
         self._melde(f"extern_{zone.nr}", text)
 
