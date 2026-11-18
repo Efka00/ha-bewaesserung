@@ -1,8 +1,5 @@
 """Brain und Hand der Bewässerung.
 
-Portierung von bewaesserung_allocator.py v1.1 (Brain) und dem Blueprint
-bewaesserung_zone.yaml (Hand). Die Trennung bleibt im Code erhalten:
-
   Brain  = rechnet, entscheidet, setzt die Freigabe   (_zyklus_intern ...)
   Hand   = schaltet Ventile und schützt das Gerät     (_hand_* , Watchdogs)
 
@@ -11,19 +8,14 @@ Sicherheitsebenen (von unten nach oben)
   Ebene 1  Hand     : Extern-Watchdog, Unavailable-Behandlung
   Ebene 2  Brain    : Laufzeitüberwachung, Cooldown, Fenster, Automatik
 
-Abweichungen vom AppDaemon-Original (bewusst):
-  * Freigabe, Handstart, letzte Bewässerung, Läufe und die Einstellungen
-    je Zone liegen in einem Store statt in input_*-Helfern. Die Freigabe
-    überlebt dadurch einen Neustart; die Recovery bleibt trotzdem drin.
-  * Den Timer-Helper gibt es nicht mehr: das Laufzeitende ist ein
-    geplanter Zeitpunkt, der den Zyklus auslöst.
-  * Kein Dry-Run, keine Altsystem-Sperre, keine Markdown-Tabelle.
+Freigabe, Handstart, letzte Bewässerung, Läufe und die Einstellungen je
+Zone liegen im Store der Anlage und überstehen einen Neustart. Das
+Laufzeitende ist ein geplanter Zeitpunkt, der den Zyklus auslöst.
 """
 
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Callable
 from datetime import datetime, timedelta
 from functools import partial
 import logging
@@ -234,7 +226,7 @@ class Anlage:
         self._nochmal = False
         self.gestartet = False
 
-        # Wie im Original: Merker, Startabstand, Rasen, Nachholaufträge.
+        # Merker, Startabstand, Rasen, Nachholaufträge.
         self._gemeldete_fehler: set[str] = set()
         self._geplant: set[int] = set()
         self._naechster_startslot = dt_util.now()
@@ -315,8 +307,7 @@ class Anlage:
         await self.store.async_save(self.daten)
 
     async def _on_ha_gestartet(self, _hass: HomeAssistant) -> None:
-        self._uebernehme_alte_helper()
-        # Wie im Original: erster Zyklus 10 s nach dem Start, damit die
+        # Erster Zyklus 10 s nach dem Start, damit die
         # Ventile Zeit haben, verfügbar zu werden.
         self._abmelden.append(
             async_call_later(self.hass, 10, self._erster_zyklus))
@@ -371,73 +362,6 @@ class Anlage:
         self.speichern()
         self.benachrichtigen()
         await self.async_zyklus()
-
-    # ------------------------------------------------------------------
-    #  Übernahme aus dem Altsystem (einmalig je Zone)
-    # ------------------------------------------------------------------
-
-    @callback
-    def _uebernehme_alte_helper(self) -> None:
-        """Werte aus den alten Helfern zone_<nr>_* übernehmen.
-
-        Läuft nur einmal je Zone. Gefunden wird über die Zonennummer im
-        Entity-Namen; fehlt ein Helfer, bleibt der Standardwert.
-        """
-        geaendert = False
-        for zone in self.zonen.values():
-            if zone.s.get("importiert"):
-                continue
-            zone.s["importiert"] = True
-            geaendert = True
-            praefix = f"zone_{zone.nr}_"
-
-            def finde(domain: str, endung: str) -> Any:
-                for st in self.hass.states.async_all(domain):
-                    if (st.object_id.startswith(praefix)
-                            and st.object_id.endswith(endung)
-                            and st.state not in UNGUELTIG):
-                        return st
-                return None
-
-            uebernommen = []
-            if st := finde("input_datetime", "_letzte_bewasserung"):
-                wert = dt_util.parse_datetime(st.state)
-                if wert is not None:
-                    if wert.tzinfo is None:
-                        wert = wert.replace(
-                            tzinfo=dt_util.get_default_time_zone())
-                    zone.letzte = wert
-                    uebernommen.append("letzte Bewässerung")
-            if st := finde("input_datetime", "_zeit"):
-                zone.s["startzeit"] = st.state
-                uebernommen.append("Startzeit")
-            if (st := finde("timer", "_timer")) and st.attributes.get("duration"):
-                teile = str(st.attributes["duration"]).split(":")
-                try:
-                    zone.s["laufzeit"] = (int(teile[0]) * 60 + int(teile[1])
-                                          + float(teile[2]) / 60.0)
-                    uebernommen.append("Laufzeit")
-                except (ValueError, IndexError):
-                    pass
-            if (st := finde("input_select", "_modus")) and st.state in (
-                    MODUS_AUS, MODUS_ZEIT, MODUS_FEUCHTE):
-                modus = st.state
-                if modus == MODUS_FEUCHTE and not zone.sensor:
-                    modus = MODUS_ZEIT
-                zone.s["modus"] = modus
-                uebernommen.append("Modus")
-            if st := finde("input_number", "_sollwert"):
-                try:
-                    zone.s["sollwert"] = float(st.state)
-                    uebernommen.append("Sollwert")
-                except ValueError:
-                    pass
-            if uebernommen:
-                _LOGGER.info("%s: aus Altsystem übernommen: %s",
-                             zone.titel, ", ".join(uebernommen))
-        if geaendert:
-            self.speichern()
-            self.benachrichtigen()
 
     # ------------------------------------------------------------------
     #  Hilfsfunktionen für defensive Zustandslesung
@@ -524,7 +448,7 @@ class Anlage:
         return await self._dienst(domain, service, {"entity_id": zone.ventil})
 
     def _ende_planen(self, zone: Zone) -> None:
-        """Ersetzt den Timer-Helper: am Laufzeitende einen Zyklus auslösen."""
+        """Am Laufzeitende einen Zyklus auslösen."""
         if zone.ende_abbruch:
             zone.ende_abbruch()
             zone.ende_abbruch = None

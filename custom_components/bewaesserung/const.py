@@ -2,9 +2,6 @@
 
 DOMAIN = "bewaesserung"
 
-# Bis 0.2.x waren Zonen Subentries dieses Typs (nur noch für die Migration).
-SUBENTRY_ZONE = "zone"
-
 # Zonen in den Optionen der Anlage: {zone_id: {...Zonendaten}}
 CONF_ZONEN = "zonen"
 
@@ -20,7 +17,7 @@ CONF_FENSTER_HANDSTART_FREI = "fenster_handstart_frei"
 CONF_RESET_UHRZEIT = "reset_uhrzeit"
 CONF_NOTIFY = "notify_dienst"
 
-# Werte aus CONFIG von bewaesserung_allocator.py v1.1
+# Standardwerte der Anlage
 ANLAGE_DEFAULTS = {
     CONF_MAX_PARALLEL: 3,
     CONF_COOLDOWN: 1.0,
@@ -38,10 +35,10 @@ ANLAGE_DEFAULTS = {
 SENSOR_MIN_GUELTIG = 1.0
 SENSOR_MAX_GUELTIG = 99.0
 
-# Zykluszeit des Brain in Sekunden (fest, wie in v1.1).
+# Zykluszeit des Brain in Sekunden (fest).
 ZYKLUS_SEKUNDEN = 30
 
-# ---- Zone (Daten eines Subentries) -----------------------------------
+# ---- Zone (Einstellungen aus dem Dialog) ----------------------------
 CONF_NR = "nr"
 CONF_NAME = "name"
 CONF_VENTIL = "ventil"
@@ -70,7 +67,7 @@ MODUS_ZEIT = "Zeit"
 MODUS_FEUCHTE = "Feuchtigkeit"
 
 ZONE_SPEICHER_DEFAULTS = {
-    "laufzeit": 10.0,          # Minuten (Fallback des Brain v1.1)
+    "laufzeit": 10.0,          # Minuten
     "startzeit": "08:00:00",
     "modus": MODUS_AUS,
     "sollwert": 35.0,
@@ -82,7 +79,6 @@ ZONE_SPEICHER_DEFAULTS = {
     "freigabe": False,
     "handstart": False,
     "per_hand": False,         # laufender Lauf wurde von Hand gestartet
-    "importiert": False,
 }
 
 # HmIP: Plattform und Puffer der Selbstabschaltung (on_time = Rest + Puffer)

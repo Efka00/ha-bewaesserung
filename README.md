@@ -4,7 +4,7 @@ Custom Integration für [Home Assistant](https://www.home-assistant.io/) zur Ste
 
 Die Integration entscheidet selbst, **welche Zone wann wie lange** gießt: nach Uhrzeit, nach Bodenfeuchte oder auf Knopfdruck. Dabei achtet sie darauf, dass die Wasserleitung nicht überlastet wird, der Rasen Vorrang bekommt und ein Ventil nie unbemerkt offen bleibt. Alles wird in der Oberfläche von Home Assistant eingerichtet. Es sind keine Helfer (`input_boolean`, `timer` …), Automationen oder YAML nötig.
 
-> **Stand:** Version 0.4.3, im Alltag mit 17 Zonen (Tasmota- und Homematic-IP-Ventile) im Einsatz. Die Oberfläche ist nur auf Deutsch.
+> **Stand:** Version 0.4.4, im Alltag mit 17 Zonen (Tasmota- und Homematic-IP-Ventile) im Einsatz. Die Oberfläche ist nur auf Deutsch.
 
 ---
 
@@ -24,7 +24,6 @@ Die Integration entscheidet selbst, **welche Zone wann wie lange** gießt: nach 
 - [Status und Grund verstehen](#status-und-grund-verstehen)
 - [Dashboard-Beispiel](#dashboard-beispiel)
 - [Neustart und Speicherung](#neustart-und-speicherung)
-- [Umstieg von Helfern und Automationen](#umstieg-von-helfern-und-automationen)
 - [Bekannte Grenzen](#bekannte-grenzen)
 - [Versionen](#versionen)
 
@@ -341,22 +340,6 @@ Im Echtbetrieb ist ein Neustart mitten in einem Lauf noch nicht geprüft, siehe 
 
 ---
 
-## Umstieg von Helfern und Automationen
-
-Wer bisher mit Helfern nach dem Muster `zone_<nr>_…` gearbeitet hat, bekommt deren Werte beim ersten Start **einmalig je Zone** übernommen. Gesucht wird über die Zonennummer im Entity-Namen:
-
-| Alter Helfer | wird zu |
-|---|---|
-| `input_datetime.zone_<nr>_…_letzte_bewasserung` | Letzte Bewässerung |
-| `input_datetime.zone_<nr>_…_zeit` | Startzeit |
-| `timer.zone_<nr>_…_timer` (Dauer) | Laufzeit |
-| `input_select.zone_<nr>_…_modus` (Aus/Zeit/Feuchtigkeit) | Modus |
-| `input_number.zone_<nr>_…_sollwert` | Sollwert |
-
-Fehlt ein Helfer, gilt der Standardwert. Danach werden die alten Helfer nicht mehr gelesen und können gelöscht werden. Alte Automationen, die dieselben Ventile schalten, unbedingt **vorher deaktivieren**, sonst arbeiten zwei Steuerungen gegeneinander.
-
----
-
 ## Bekannte Grenzen
 
 - **Kein Regen- oder Wetterbezug.** Die Integration kennt nur Bodenfeuchte und Uhrzeit. Wer bei Regen pausieren will, schaltet die *Automatik* per eigener Automation aus.
@@ -371,13 +354,14 @@ Fehlt ein Helfer, gilt der Standardwert. Danach werden die alten Helfer nicht me
 
 | Version | Änderungen |
 |---|---|
+| 0.4.4 | Übernahme alter Helfer und Migration aus 0.2.x entfernt, Code aufgeräumt. |
 | 0.4.3 | Push-Nachrichten an mehrere Handys. Jede Einstellung im Einrichtungsdialog hat jetzt einen kurzen Hilfetext. |
 | 0.4.2 | Push-Nachricht nach einem Neustart, wenn ein Ventil offen ist, das die Bewässerung nicht geöffnet hat, oder wenn ein Lauf aktiv, sein Ventil aber zu ist. Handy für Push-Nachrichten per Auswahlliste statt Freitext. |
 | 0.4.1 | Kein falscher Status „Läuft extern“ mehr, wenn Laufzeitende und Takt zusammenfallen. Neuer Diagnose-Binärsensor **Ventil** je Zone. |
 | 0.4.0 | Entity **Wiederholungen**: Tageslimit für automatische Läufe im Feuchtemodus. |
 | 0.3.1 | Handstart auch bei ausgeschalteter Automatik. **Ende** zeigt nach dem Lauf das tatsächliche Ende. |
 | 0.3.0 | Zonen in den Optionen der Integration statt als eigene Einträge, automatische Migration. |
-| 0.2.x | Steuerung (Brain) und Ventilschutz (Hand) komplett in der Integration, alle Entities, Übernahme alter Helfer. |
+| 0.2.x | Steuerung (Brain) und Ventilschutz (Hand) komplett in der Integration, alle Entities. |
 | 0.1.x | Grundgerüst und Einrichtungsdialog. |
 
 ## Lizenz

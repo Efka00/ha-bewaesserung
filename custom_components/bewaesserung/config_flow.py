@@ -1,8 +1,7 @@
 """Config-Flow: Anlage anlegen; Optionen = Anlage einstellen + Zonen verwalten.
 
 Die Zonen liegen in den Optionen der Anlage unter CONF_ZONEN als
-{zone_id: {...}}. Bis 0.2.x waren es Subentries – die Migration steht in
-__init__.py (async_migrate_entry).
+{zone_id: {...}}.
 """
 
 from __future__ import annotations
@@ -193,7 +192,6 @@ def zone_titel(daten: dict[str, Any]) -> str:
 class BewaesserungConfigFlow(ConfigFlow, domain=DOMAIN):
     """Legt die Anlage an."""
 
-    # 2 = Zonen in den Optionen statt als Subentries.
     VERSION = 2
 
     async def async_step_user(
