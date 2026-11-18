@@ -17,8 +17,9 @@ from homeassistant.config_entries import (
     ConfigFlowResult,
     OptionsFlow,
 )
-from homeassistant.core import callback
+from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers import selector
+from homeassistant.util import slugify
 from homeassistant.util.ulid import ulid_now
 
 from .const import (
@@ -73,7 +74,28 @@ def _optional(key: str, werte: dict[str, Any]) -> vol.Optional:
     return vol.Optional(key)
 
 
-def _anlage_schema(werte: dict[str, Any]) -> vol.Schema:
+def _handys(hass: HomeAssistant, aktuell: Any) -> selector.SelectSelector:
+    """Auswahl der Handys aus der Companion-App (notify.mobile_app_*).
+
+    Ein bereits gespeicherter Dienst bleibt wählbar, auch wenn er gerade
+    nicht registriert ist (z. B. App abgemeldet).
+    """
+    optionen: list[selector.SelectOptionDict] = []
+    for eintrag in hass.config_entries.async_entries("mobile_app"):
+        name = str(eintrag.data.get("device_name") or eintrag.title)
+        dienst = f"mobile_app_{slugify(name)}"
+        if hass.services.has_service("notify", dienst):
+            optionen.append(selector.SelectOptionDict(
+                value=f"notify.{dienst}", label=name))
+    optionen.sort(key=lambda o: o["label"].lower())
+    if aktuell and aktuell not in [o["value"] for o in optionen]:
+        optionen.append(selector.SelectOptionDict(
+            value=str(aktuell), label=str(aktuell)))
+    return selector.SelectSelector(selector.SelectSelectorConfig(
+        options=optionen, mode=selector.SelectSelectorMode.DROPDOWN))
+
+
+def _anlage_schema(hass: HomeAssistant, werte: dict[str, Any]) -> vol.Schema:
     w = {**ANLAGE_DEFAULTS, **werte}
     return vol.Schema(
         {
@@ -95,7 +117,7 @@ def _anlage_schema(werte: dict[str, Any]) -> vol.Schema:
                          default=w[CONF_FENSTER_HANDSTART_FREI]):
                 selector.BooleanSelector(),
             _optional(CONF_RESET_UHRZEIT, w): selector.TimeSelector(),
-            _optional(CONF_NOTIFY, w): selector.TextSelector(),
+            _optional(CONF_NOTIFY, w): _handys(hass, w.get(CONF_NOTIFY)),
         }
     )
 
@@ -171,7 +193,7 @@ class BewaesserungConfigFlow(ConfigFlow, domain=DOMAIN):
                 options={**_bereinige(user_input), CONF_ZONEN: {}},
             )
         return self.async_show_form(
-            step_id="user", data_schema=_anlage_schema({})
+            step_id="user", data_schema=_anlage_schema(self.hass, {})
         )
 
     @staticmethod
@@ -241,7 +263,8 @@ class BewaesserungOptionsFlow(OptionsFlow):
             return self._speichern(anlage=anlage)
         return self.async_show_form(
             step_id="anlage",
-            data_schema=_anlage_schema(dict(self.config_entry.options)),
+            data_schema=_anlage_schema(
+                self.hass, dict(self.config_entry.options)),
         )
 
     async def async_step_zone_neu(

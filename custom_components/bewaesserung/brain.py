@@ -244,6 +244,8 @@ class Anlage:
         # Nachholaufträge {zone_nr: Restlaufzeit in Minuten}. Bewusst nur
         # im Speicher: verfallen bei Automatik aus, Fensterende, Neustart.
         self.nachholen: dict[int, float] = {}
+        # Erster Zyklus nach dem Start: fremd geöffnete Ventile melden.
+        self._start_pruefen = True
 
         # Für die Anlagen-Sensoren.
         self.status = "Startet"
@@ -943,6 +945,38 @@ class Anlage:
             z = b["zone"]
             z.zustand, z.grund, z.sensorfehler = (
                 b["zustand"], b["grund"], b["sensorfehler"])
+
+        # --- Nach dem Start: Ventil und Lauf passen nicht zusammen -----
+        # Eigene Läufe haben ihre Freigabe im Store (oder werden oben
+        # übernommen); was jetzt „extern“ ist, hat die Bewässerung nicht
+        # geöffnet. Der Extern-Watchdog läuft seit dem Start mit.
+        # Umgekehrt kann ein Ventil im Neustart selbst neu gestartet und
+        # zu sein, während der Lauf noch als aktiv gilt. Nur Läufe von
+        # vor dem Start prüfen (b["laeuft"]) – frische Starts aus diesem
+        # Zyklus haben ihr Ventil eben erst geschaltet.
+        if self._start_pruefen:
+            self._start_pruefen = False
+            for b in bewertungen:
+                z = b["zone"]
+                if b["zustand"] == ST_EXTERN:
+                    self._melde(
+                        f"start_{z.nr}",
+                        f"{z.titel}: Ventil ist nach dem Neustart offen, "
+                        "wurde aber nicht von der Bewässerung geöffnet. "
+                        f"Es wird spätestens {z.max_extern} min nach dem "
+                        "Start abgeschaltet.")
+                elif (b["laeuft"] and z.freigabe
+                        and not b["recovery"]
+                        and not self._ist_an(z.ventil)):
+                    ende = z.ende
+                    bis = (f" bis {dt_util.as_local(ende):%H:%M}"
+                           if ende else "")
+                    self._melde(
+                        f"start_{z.nr}",
+                        f"{z.titel}: Lauf ist nach dem Neustart noch aktiv"
+                        f"{bis}, das Ventil ist aber zu. Es wird nicht "
+                        "wieder geöffnet.")
+
         self._status(None if self.master else "Automatik aus")
 
     # ------------------------------------------------------------------
