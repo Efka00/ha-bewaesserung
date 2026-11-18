@@ -6,7 +6,7 @@
     "step": {
       "user": {
         "title": "Bewässerung einrichten",
-        "description": "Globale Einstellungen der Anlage. Zonen werden anschließend unter „Konfigurieren“ angelegt.",
+        "description": "Globale Einstellungen der Anlage, gelten für alle Zonen. Zonen legst du danach unter „Konfigurieren“ an.",
         "data": {
           "max_parallel": "Maximal parallele Zonen",
           "cooldown_stunden": "Cooldown nach einem Lauf",
@@ -20,11 +20,16 @@
           "notify_dienst": "Push-Nachrichten an"
         },
         "data_description": {
-          "cooldown_stunden": "Sperrzeit nach dem Ende einer Bewässerung, bevor dieselbe Zone erneut automatisch starten darf.",
-          "rasen_nachlauf_sekunden": "Nach der letzten Rasenzone bleiben die Gartenzonen so lange gesperrt.",
-          "fenster_hart": "Eine Zone startet nur, wenn ihre volle Laufzeit vor dem Fensterende abgeschlossen ist.",
-          "reset_uhrzeit": "Leer lassen, dann zählt der Zähler als Gesamtsumme weiter.",
-          "notify_dienst": "Handy aus der Companion-App, das Fehler als Push-Nachricht bekommt. Leer lassen für keine Push-Nachrichten."
+          "max_parallel": "So viele Zonen dürfen gleichzeitig gießen.",
+          "cooldown_stunden": "Nach einem Lauf startet dieselbe Zone so lange nicht automatisch neu. Handstart geht trotzdem.",
+          "start_abstand_sekunden": "Mehrere Starts werden um so viele Sekunden versetzt, damit nicht alle Ventile gleichzeitig öffnen. 0 = aus.",
+          "rasen_nachlauf_sekunden": "Nach der letzten Rasenzone bleiben die übrigen Zonen so lange gesperrt.",
+          "fenster_start": "Ab dieser Uhrzeit dürfen Zonen automatisch starten.",
+          "fenster_ende": "Danach startet keine Zone mehr automatisch. Laufende Zonen laufen zu Ende.",
+          "fenster_hart": "Eine Zone startet nur, wenn ihre volle Laufzeit vor dem Fensterende fertig ist.",
+          "fenster_handstart_frei": "Handstarts gehen auch außerhalb des Startfensters, z. B. nachts.",
+          "reset_uhrzeit": "Setzt „Läufe heute“ und das Tageslimit der Wiederholungen zurück. Leer = nie, das Tageslimit bleibt dann irgendwann dauerhaft erreicht.",
+          "notify_dienst": "Handys aus der Companion-App, die Fehler als Push-Nachricht bekommen. Mehrere möglich. Leer = nur Eintrag im Log."
         }
       }
     }
@@ -41,7 +46,8 @@
           "zone_neu": "Zone hinzufügen",
           "zone_bearbeiten": "Zone bearbeiten",
           "zone_loeschen": "Zonen löschen"
-        }
+        },
+        "description": "Hier stellst du die Anlage ein und verwaltest die Zonen. Laufzeit, Startzeit, Modus, Sollwert und Wiederholungen änderst du direkt an den Entities der jeweiligen Zone."
       },
       "anlage": {
         "title": "Anlage",
@@ -58,12 +64,18 @@
           "notify_dienst": "Push-Nachrichten an"
         },
         "data_description": {
-          "cooldown_stunden": "Sperrzeit nach dem Ende einer Bewässerung, bevor dieselbe Zone erneut automatisch starten darf.",
-          "rasen_nachlauf_sekunden": "Nach der letzten Rasenzone bleiben die Gartenzonen so lange gesperrt.",
-          "fenster_hart": "Eine Zone startet nur, wenn ihre volle Laufzeit vor dem Fensterende abgeschlossen ist.",
-          "reset_uhrzeit": "Leer lassen, dann zählt der Zähler als Gesamtsumme weiter.",
-          "notify_dienst": "Handy aus der Companion-App, das Fehler als Push-Nachricht bekommt. Leer lassen für keine Push-Nachrichten."
-        }
+          "max_parallel": "So viele Zonen dürfen gleichzeitig gießen.",
+          "cooldown_stunden": "Nach einem Lauf startet dieselbe Zone so lange nicht automatisch neu. Handstart geht trotzdem.",
+          "start_abstand_sekunden": "Mehrere Starts werden um so viele Sekunden versetzt, damit nicht alle Ventile gleichzeitig öffnen. 0 = aus.",
+          "rasen_nachlauf_sekunden": "Nach der letzten Rasenzone bleiben die übrigen Zonen so lange gesperrt.",
+          "fenster_start": "Ab dieser Uhrzeit dürfen Zonen automatisch starten.",
+          "fenster_ende": "Danach startet keine Zone mehr automatisch. Laufende Zonen laufen zu Ende.",
+          "fenster_hart": "Eine Zone startet nur, wenn ihre volle Laufzeit vor dem Fensterende fertig ist.",
+          "fenster_handstart_frei": "Handstarts gehen auch außerhalb des Startfensters, z. B. nachts.",
+          "reset_uhrzeit": "Setzt „Läufe heute“ und das Tageslimit der Wiederholungen zurück. Leer = nie, das Tageslimit bleibt dann irgendwann dauerhaft erreicht.",
+          "notify_dienst": "Handys aus der Companion-App, die Fehler als Push-Nachricht bekommen. Mehrere möglich. Leer = nur Eintrag im Log."
+        },
+        "description": "Globale Einstellungen, gelten für alle Zonen."
       },
       "zone_neu": {
         "title": "Zone hinzufügen",
@@ -82,22 +94,29 @@
           "hmip_abschaltung": "HmIP-Selbstabschaltung setzen"
         },
         "data_description": {
-          "ventil": "Ein Schalter oder Ventil. Wichtig: das Gerät braucht eine eigene Abschaltung (z. B. Tasmota PulseTime).",
-          "sensor": "Optional. Ohne Sensor läuft die Zone nur über Zeit oder von Hand.",
+          "nr": "Eindeutige Zonennummer. Bestimmt Reihenfolge und Gerätenamen, z. B. „Zone 3 Gemüse“.",
+          "name": "Kurzer Name der Zone, z. B. Gemüse.",
+          "ventil": "Schalter oder Ventil der Zone. Das Gerät braucht eine eigene Abschaltung (z. B. Tasmota PulseTime).",
+          "sensor": "Optional, Bodenfeuchte in %. Nur mit Sensor gibt es den Modus Feuchtigkeit. Ohne Sensor läuft die Zone über Zeit oder von Hand.",
           "verteiler": "Auswählen oder neuen Namen eintippen. Zonen mit demselben Verteiler laufen nie gleichzeitig.",
-          "basis_prio": "Rang bei Zeitsteuerung und Handstart – höher ist dringender.",
-          "exklusiv": "Die Zone läuft nur allein (z. B. hoher Durchsatz).",
-          "parallel_erlaubt": "Die Zone belegt keinen Verteiler-Slot.",
-          "rasen": "Verdrängt alle anderen Zonen, verdrängte Zonen holen ihre Restlaufzeit nach.",
-          "cooldown_stunden": "Leer lassen für den Wert der Anlage.",
+          "basis_prio": "Bei Platzmangel startet die Zone mit dem höheren Wert zuerst (Zeitsteuerung und Handstart).",
+          "exklusiv": "Die Zone läuft nur allein und sperrt solange alle anderen, z. B. bei hohem Wasserbedarf.",
+          "parallel_erlaubt": "Die Zone belegt ihren Verteiler nicht. Eine weitere Zone am selben Verteiler darf mitlaufen.",
+          "rasen": "Hat Vorrang: stoppt alle anderen Zonen, diese holen ihre Restlaufzeit danach nach.",
+          "cooldown_stunden": "Leer = Wert der Anlage, 0 = keine Abkühlzeit für diese Zone.",
           "max_extern_minuten": "Läuft das Ventil länger ohne Freigabe (z. B. von Hand geöffnet), wird es abgeschaltet. Muss über der längsten Laufzeit liegen.",
-          "hmip_abschaltung": "Nur bei Homematic-IP-Ventilen: vor dem Öffnen wird ON_TIME auf Laufzeit + 5 min gesetzt, damit das Ventil auch ohne Home Assistant schließt."
-        }
+          "hmip_abschaltung": "Nur bei Homematic-IP-Ventilen: Vor dem Öffnen wird ON_TIME auf Laufzeit + 5 min gesetzt, damit das Ventil auch ohne Home Assistant schließt."
+        },
+        "description": "Eine Zone = ein Ventil. Laufzeit, Startzeit und Modus stellst du danach an den Entities der Zone ein. Neue Zonen starten im Modus Aus."
       },
       "zone_bearbeiten": {
         "title": "Zone bearbeiten",
         "data": {
           "zone": "Zone"
+        },
+        "description": "Zone auswählen, deren Einstellungen du ändern willst.",
+        "data_description": {
+          "zone": "Im nächsten Schritt erscheinen alle Einstellungen dieser Zone."
         }
       },
       "zone_daten": {
@@ -117,23 +136,29 @@
           "hmip_abschaltung": "HmIP-Selbstabschaltung setzen"
         },
         "data_description": {
-          "ventil": "Ein Schalter oder Ventil. Wichtig: das Gerät braucht eine eigene Abschaltung (z. B. Tasmota PulseTime).",
-          "sensor": "Optional. Ohne Sensor läuft die Zone nur über Zeit oder von Hand.",
+          "nr": "Eindeutige Zonennummer. Bestimmt Reihenfolge und Gerätenamen, z. B. „Zone 3 Gemüse“.",
+          "name": "Kurzer Name der Zone, z. B. Gemüse.",
+          "ventil": "Schalter oder Ventil der Zone. Das Gerät braucht eine eigene Abschaltung (z. B. Tasmota PulseTime).",
+          "sensor": "Optional, Bodenfeuchte in %. Nur mit Sensor gibt es den Modus Feuchtigkeit. Ohne Sensor läuft die Zone über Zeit oder von Hand.",
           "verteiler": "Auswählen oder neuen Namen eintippen. Zonen mit demselben Verteiler laufen nie gleichzeitig.",
-          "basis_prio": "Rang bei Zeitsteuerung und Handstart – höher ist dringender.",
-          "exklusiv": "Die Zone läuft nur allein (z. B. hoher Durchsatz).",
-          "parallel_erlaubt": "Die Zone belegt keinen Verteiler-Slot.",
-          "rasen": "Verdrängt alle anderen Zonen, verdrängte Zonen holen ihre Restlaufzeit nach.",
-          "cooldown_stunden": "Leer lassen für den Wert der Anlage.",
+          "basis_prio": "Bei Platzmangel startet die Zone mit dem höheren Wert zuerst (Zeitsteuerung und Handstart).",
+          "exklusiv": "Die Zone läuft nur allein und sperrt solange alle anderen, z. B. bei hohem Wasserbedarf.",
+          "parallel_erlaubt": "Die Zone belegt ihren Verteiler nicht. Eine weitere Zone am selben Verteiler darf mitlaufen.",
+          "rasen": "Hat Vorrang: stoppt alle anderen Zonen, diese holen ihre Restlaufzeit danach nach.",
+          "cooldown_stunden": "Leer = Wert der Anlage, 0 = keine Abkühlzeit für diese Zone.",
           "max_extern_minuten": "Läuft das Ventil länger ohne Freigabe (z. B. von Hand geöffnet), wird es abgeschaltet. Muss über der längsten Laufzeit liegen.",
-          "hmip_abschaltung": "Nur bei Homematic-IP-Ventilen: vor dem Öffnen wird ON_TIME auf Laufzeit + 5 min gesetzt, damit das Ventil auch ohne Home Assistant schließt."
-        }
+          "hmip_abschaltung": "Nur bei Homematic-IP-Ventilen: Vor dem Öffnen wird ON_TIME auf Laufzeit + 5 min gesetzt, damit das Ventil auch ohne Home Assistant schließt."
+        },
+        "description": "Änderungen gelten sofort, die Werte an den Entities der Zone bleiben erhalten."
       },
       "zone_loeschen": {
         "title": "Zonen löschen",
         "description": "Ausgewählte Zonen werden mit ihren Geräten und Entities entfernt.",
         "data": {
           "zone": "Zonen"
+        },
+        "data_description": {
+          "zone": "Mehrere möglich. Das Löschen lässt sich nicht rückgängig machen."
         }
       }
     }

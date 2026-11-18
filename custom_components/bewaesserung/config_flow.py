@@ -74,11 +74,20 @@ def _optional(key: str, werte: dict[str, Any]) -> vol.Optional:
     return vol.Optional(key)
 
 
-def _handys(hass: HomeAssistant, aktuell: Any) -> selector.SelectSelector:
-    """Auswahl der Handys aus der Companion-App (notify.mobile_app_*).
+def notify_liste(wert: Any) -> list[str]:
+    """Gespeicherte Push-Ziele als Liste (bis 0.4.2 ein einzelner Text)."""
+    if not wert:
+        return []
+    if isinstance(wert, str):
+        return [wert]
+    return [str(w) for w in wert if w]
 
-    Ein bereits gespeicherter Dienst bleibt wählbar, auch wenn er gerade
-    nicht registriert ist (z. B. App abgemeldet).
+
+def _handys(hass: HomeAssistant, aktuell: Any) -> selector.SelectSelector:
+    """Mehrfachauswahl der Handys aus der Companion-App (notify.mobile_app_*).
+
+    Bereits gespeicherte Dienste bleiben wählbar, auch wenn sie gerade
+    nicht registriert sind (z. B. App abgemeldet).
     """
     optionen: list[selector.SelectOptionDict] = []
     for eintrag in hass.config_entries.async_entries("mobile_app"):
@@ -88,11 +97,13 @@ def _handys(hass: HomeAssistant, aktuell: Any) -> selector.SelectSelector:
             optionen.append(selector.SelectOptionDict(
                 value=f"notify.{dienst}", label=name))
     optionen.sort(key=lambda o: o["label"].lower())
-    if aktuell and aktuell not in [o["value"] for o in optionen]:
-        optionen.append(selector.SelectOptionDict(
-            value=str(aktuell), label=str(aktuell)))
+    vorhanden = {o["value"] for o in optionen}
+    for dienst in notify_liste(aktuell):
+        if dienst not in vorhanden:
+            optionen.append(selector.SelectOptionDict(value=dienst, label=dienst))
     return selector.SelectSelector(selector.SelectSelectorConfig(
-        options=optionen, mode=selector.SelectSelectorMode.DROPDOWN))
+        options=optionen, multiple=True,
+        mode=selector.SelectSelectorMode.DROPDOWN))
 
 
 def _anlage_schema(hass: HomeAssistant, werte: dict[str, Any]) -> vol.Schema:
@@ -117,7 +128,8 @@ def _anlage_schema(hass: HomeAssistant, werte: dict[str, Any]) -> vol.Schema:
                          default=w[CONF_FENSTER_HANDSTART_FREI]):
                 selector.BooleanSelector(),
             _optional(CONF_RESET_UHRZEIT, w): selector.TimeSelector(),
-            _optional(CONF_NOTIFY, w): _handys(hass, w.get(CONF_NOTIFY)),
+            vol.Optional(CONF_NOTIFY, default=notify_liste(w.get(CONF_NOTIFY))):
+                _handys(hass, w.get(CONF_NOTIFY)),
         }
     )
 

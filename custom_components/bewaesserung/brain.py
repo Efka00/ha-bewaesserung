@@ -482,12 +482,15 @@ class Anlage:
             return
         self._gemeldete_fehler.add(schluessel)
         _LOGGER.warning("%s", text)
-        dienst = str(self.opt.get(CONF_NOTIFY) or "").strip().replace("/", ".")
-        if "." not in dienst:
-            return
-        domain, service = dienst.split(".", 1)
-        self.hass.async_create_task(self._dienst(
-            domain, service, {"title": "Bewässerung", "message": text}))
+        roh = self.opt.get(CONF_NOTIFY) or []
+        # Bis 0.4.2 ein einzelner Dienst als Text, seit 0.4.3 eine Liste.
+        for dienst in [roh] if isinstance(roh, str) else roh:
+            dienst = str(dienst).strip().replace("/", ".")
+            if "." not in dienst:
+                continue
+            domain, service = dienst.split(".", 1)
+            self.hass.async_create_task(self._dienst(
+                domain, service, {"title": "Bewässerung", "message": text}))
 
     def _fehler_quittieren(self, schluessel: str) -> None:
         self._gemeldete_fehler.discard(schluessel)

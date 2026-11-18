@@ -4,7 +4,7 @@ Custom Integration für [Home Assistant](https://www.home-assistant.io/) zur Ste
 
 Die Integration entscheidet selbst, **welche Zone wann wie lange** gießt: nach Uhrzeit, nach Bodenfeuchte oder auf Knopfdruck. Dabei achtet sie darauf, dass die Wasserleitung nicht überlastet wird, der Rasen Vorrang bekommt und ein Ventil nie unbemerkt offen bleibt. Alles wird in der Oberfläche von Home Assistant eingerichtet. Es sind keine Helfer (`input_boolean`, `timer` …), Automationen oder YAML nötig.
 
-> **Stand:** Version 0.4.2, im Alltag mit 17 Zonen (Tasmota- und Homematic-IP-Ventile) im Einsatz. Die Oberfläche ist nur auf Deutsch.
+> **Stand:** Version 0.4.3, im Alltag mit 17 Zonen (Tasmota- und Homematic-IP-Ventile) im Einsatz. Die Oberfläche ist nur auf Deutsch.
 
 ---
 
@@ -97,7 +97,7 @@ Updates erscheinen danach im Marketplace als neue Version (z. B. `v0.4.1`). Nach
 
 Die Integration kann nur einmal eingerichtet werden. Beim Hinzufügen werden die **Einstellungen der Anlage** abgefragt. Zonen kommen danach dazu.
 
-Alle Einstellungen lassen sich später ändern: *Einstellungen → Geräte & Dienste → Bewässerung → Konfigurieren*. Dort gibt es ein Menü:
+Jede Einstellung hat im Dialog einen kurzen Hilfetext. Alle Einstellungen lassen sich später ändern: *Einstellungen → Geräte & Dienste → Bewässerung → Konfigurieren*. Dort gibt es ein Menü:
 
 - **Anlage einstellen**
 - **Zone hinzufügen**
@@ -116,7 +116,7 @@ Alle Einstellungen lassen sich später ändern: *Einstellungen → Geräte & Die
 | Laufzeit muss ins Fenster passen | an | Eine Zone startet nur, wenn ihre volle Laufzeit vor dem Fensterende fertig ist. |
 | Handstart ignoriert das Fenster | an | Handstarts sind auch nachts möglich. |
 | Täglicher Zähler-Reset um | 00:10 | Setzt „Läufe heute“ und das Tageslimit zurück. Leer = kein Reset (siehe [Bekannte Grenzen](#bekannte-grenzen)). |
-| Push-Nachrichten an | leer | Auswahl aus allen Handys, auf denen die Home-Assistant-Companion-App angemeldet ist. Leer = keine Push-Nachrichten, Fehler stehen dann nur im Log. |
+| Push-Nachrichten an | leer | Auswahl aus allen Handys, auf denen die Home-Assistant-Companion-App angemeldet ist, mehrere möglich. Leer = keine Push-Nachrichten, Fehler stehen dann nur im Log. |
 
 ### Zone anlegen
 
@@ -371,6 +371,7 @@ Fehlt ein Helfer, gilt der Standardwert. Danach werden die alten Helfer nicht me
 
 | Version | Änderungen |
 |---|---|
+| 0.4.3 | Push-Nachrichten an mehrere Handys. Jede Einstellung im Einrichtungsdialog hat jetzt einen kurzen Hilfetext. |
 | 0.4.2 | Push-Nachricht nach einem Neustart, wenn ein Ventil offen ist, das die Bewässerung nicht geöffnet hat, oder wenn ein Lauf aktiv, sein Ventil aber zu ist. Handy für Push-Nachrichten per Auswahlliste statt Freitext. |
 | 0.4.1 | Kein falscher Status „Läuft extern“ mehr, wenn Laufzeitende und Takt zusammenfallen. Neuer Diagnose-Binärsensor **Ventil** je Zone. |
 | 0.4.0 | Entity **Wiederholungen**: Tageslimit für automatische Läufe im Feuchtemodus. |
