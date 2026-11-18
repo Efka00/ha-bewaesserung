@@ -53,6 +53,7 @@ from homeassistant.util import dt as dt_util
 
 from .const import (
     ANLAGE_DEFAULTS,
+    AUS_KARENZ_SEKUNDEN,
     CONF_BASIS_PRIO,
     CONF_COOLDOWN,
     CONF_COOLDOWN_ZONE,
@@ -152,6 +153,8 @@ class Zone:
         self.ende_abbruch: CALLBACK_TYPE | None = None
         self.extern_abbruch: CALLBACK_TYPE | None = None
         self.weg_abbruch: CALLBACK_TYPE | None = None
+        # Zeitpunkt des letzten eigenen Ausschaltbefehls.
+        self.aus_gesendet: datetime | None = None
 
     @property
     def titel(self) -> str:
@@ -447,6 +450,12 @@ class Anlage:
     def _ist_an(self, entity_id: str) -> bool:
         return self._zustand(entity_id) in AN_ZUSTAENDE
 
+    def ventil_offen(self, zone: Zone) -> bool | None:
+        """Gemeldeter Ventilzustand; None, wenn das Ventil unerreichbar ist."""
+        if not self._ist_verfuegbar(zone.ventil):
+            return None
+        return self._ist_an(zone.ventil)
+
     def _ist_verfuegbar(self, entity_id: str) -> bool:
         """Unavailable ist NICHT gleich aus.
 
@@ -506,6 +515,7 @@ class Anlage:
             service = "open_valve" if an else "close_valve"
         else:
             domain, service = "switch", ("turn_on" if an else "turn_off")
+        zone.aus_gesendet = None if an else dt_util.now()
         return await self._dienst(domain, service, {"entity_id": zone.ventil})
 
     def _ende_planen(self, zone: Zone) -> None:
@@ -662,6 +672,12 @@ class Anlage:
 
         # --- Hand-Erkennung und Recovery -------------------------------
         if self._ist_an(zone.ventil) and not zone.freigabe:
+            # Eben selbst ausgeschaltet, das Gerät hat es nur noch nicht
+            # zurückgemeldet (Laufzeitende und Takt in derselben Sekunde).
+            if (zone.aus_gesendet is not None
+                    and (jetzt - zone.aus_gesendet).total_seconds()
+                    < AUS_KARENZ_SEKUNDEN):
+                return ergebnis(ST_KEIN_BEDARF, "Ventil schließt")
             start = zone.letzte
             rest_sekunden = 0.0
             if start is not None:

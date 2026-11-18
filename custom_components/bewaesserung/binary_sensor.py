@@ -1,4 +1,4 @@
-"""Binärsensoren: Bewässerung läuft, Rasen aktiv, Zone läuft."""
+"""Binärsensoren: Bewässerung läuft, Rasen aktiv, Zone läuft, Ventil."""
 
 from __future__ import annotations
 
@@ -7,6 +7,7 @@ from homeassistant.components.binary_sensor import (
     BinarySensorEntity,
 )
 from homeassistant.config_entries import ConfigEntry
+from homeassistant.const import EntityCategory
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
@@ -20,7 +21,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry,
     anlage: Anlage = entry.runtime_data
     async_add_entities([AnlageLaeuft(anlage), RasenAktiv(anlage)])
     for zone in anlage.zonen.values():
-        async_add_entities([ZoneLaeuft(anlage, zone)])
+        async_add_entities([ZoneLaeuft(anlage, zone), VentilOffen(anlage, zone)])
 
 
 class AnlageLaeuft(AnlageEntity, BinarySensorEntity):
@@ -56,3 +57,25 @@ class ZoneLaeuft(ZonenEntity, BinarySensorEntity):
     @property
     def is_on(self) -> bool:
         return self.zone.freigabe
+
+
+class VentilOffen(ZonenEntity, BinarySensorEntity):
+    """Was das Ventil selbst meldet – unabhängig von der Freigabe."""
+
+    _attr_device_class = BinarySensorDeviceClass.OPENING
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+
+    def __init__(self, anlage: Anlage, zone: Zone) -> None:
+        super().__init__(anlage, zone, "ventil", "Ventil")
+
+    @property
+    def icon(self) -> str:
+        return "mdi:valve-open" if self.is_on else "mdi:valve-closed"
+
+    @property
+    def available(self) -> bool:
+        return self.anlage.ventil_offen(self.zone) is not None
+
+    @property
+    def is_on(self) -> bool | None:
+        return self.anlage.ventil_offen(self.zone)

@@ -92,6 +92,10 @@ HMIP_PUFFER_SEKUNDEN = 300
 # Ventil gilt als unerreichbar, wenn es so lange unavailable ist.
 VENTIL_WEG_SEKUNDEN = 30
 
+# So lange nach dem eigenen Ausschalten gilt ein noch „an“ gemeldetes
+# Ventil als schließend, nicht als von Hand geschaltet.
+AUS_KARENZ_SEKUNDEN = 15
+
 # ---- Zustände für die Statusanzeige ----------------------------------
 ST_AUS = "Aus"
 ST_GESPERRT = "Gesperrt"
