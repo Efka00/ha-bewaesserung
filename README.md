@@ -4,7 +4,7 @@ Custom Integration für [Home Assistant](https://www.home-assistant.io/) zur Ste
 
 Die Integration entscheidet selbst, **welche Zone wann wie lange** gießt: nach Uhrzeit, nach Bodenfeuchte oder auf Knopfdruck. Dabei achtet sie darauf, dass die Wasserleitung nicht überlastet wird, der Rasen Vorrang bekommt und ein Ventil nie unbemerkt offen bleibt. Alles wird in der Oberfläche von Home Assistant eingerichtet. Es sind keine Helfer (`input_boolean`, `timer` …), Automationen oder YAML nötig.
 
-> **Stand:** Version 0.4.4, im Alltag mit 17 Zonen (Tasmota- und Homematic-IP-Ventile) im Einsatz. Die Oberfläche ist nur auf Deutsch.
+> **Stand:** Version 0.4.5, im Alltag mit 17 Zonen (Tasmota- und Homematic-IP-Ventile) im Einsatz. Die Oberfläche ist nur auf Deutsch.
 
 ---
 
@@ -111,7 +111,7 @@ Jede Einstellung hat im Dialog einen kurzen Hilfetext. Alle Einstellungen lassen
 | Cooldown nach einem Lauf | 1 h | Nach dem Ende eines Laufs startet dieselbe Zone so lange nicht erneut automatisch. Zonen können einen eigenen Wert haben. |
 | Startabstand zwischen zwei Ventilen | 5 s | Mehrere Starts werden um so viele Sekunden versetzt, damit nicht alle Ventile gleichzeitig aufschlagen (Druckstoß, Netzteil). 0 = aus. |
 | Gartensperre nach Rasenende | 60 s | Nach der letzten Rasenzone bleiben die anderen Zonen noch so lange gesperrt. |
-| Startfenster ab / bis | 06:00 / 22:00 | Nur in diesem Zeitraum starten Zonen automatisch. Laufende Zonen werden am Fensterende **nicht** abgebrochen. |
+| Startfenster ab / bis | 06:00 / 22:00 | Nur in diesem Zeitraum starten Zonen automatisch. Laufende Zonen werden am Fensterende **nicht** abgebrochen. Das Fenster darf über Mitternacht gehen, z. B. 22:00 bis 06:00 für nächtliches Bewässern. |
 | Laufzeit muss ins Fenster passen | an | Eine Zone startet nur, wenn ihre volle Laufzeit vor dem Fensterende fertig ist. |
 | Handstart ignoriert das Fenster | an | Handstarts sind auch nachts möglich. |
 | Täglicher Zähler-Reset um | 00:10 | Setzt „Läufe heute“ und das Tageslimit zurück. Leer = kein Reset (siehe [Bekannte Grenzen](#bekannte-grenzen)). |
@@ -213,7 +213,7 @@ Alle **30 Sekunden** bewertet das Brain jede Zone. Bei jeder Bedienung (Handstar
 
 Die Prüfungen laufen in dieser Reihenfolge. Die erste, die zutrifft, bestimmt den Status:
 
-1. **Ventil nicht erreichbar** → Fehler, die Zone startet nicht.
+1. **Ventil nicht erreichbar** → Fehler, die Zone startet nicht. Ein laufender Lauf zählt dagegen bis zu seinem Ende weiter.
 2. **Ventil offen ohne Freigabe** → „Läuft extern“, also von Hand geschaltet.
 3. **Zone läuft bereits** → weiterlaufen, bis die Laufzeit erreicht ist oder der Handstart ausgeschaltet wird.
 4. **Rasen läuft oder Gartensperre nach Rasenende** → gesperrt, gilt nicht für Rasenzonen.
@@ -268,7 +268,7 @@ Die Absicherung ist in drei Ebenen aufgebaut:
 | Ebene | Wer | Was |
 |---|---|---|
 | 0 – Hardware | Ventil | `PulseTime`, Auto-Off oder HmIP-`ON_TIME`: schließt auch ohne Home Assistant. |
-| 1 – Hand | Integration | **Extern-Watchdog:** Ein Ventil, das ohne Freigabe länger als *maximale Laufzeit ohne Freigabe* offen ist, wird abgeschaltet, mit Push-Nachricht. Das gilt auch für Ventile, die beim Start von Home Assistant schon offen sind. **Prüfung nach Neustart:** Ist beim Start ein Ventil offen, das die Bewässerung nicht selbst geöffnet hat, kommt sofort eine Push-Nachricht, nicht erst beim Abschalten. Ebenso, wenn ein Lauf noch aktiv ist, sein Ventil aber zu ist. **Nicht erreichbar:** Ist ein Ventil 30 s `unavailable`, kommt eine Push-Nachricht. Nicht erreichbare Ventile werden nie gestartet. |
+| 1 – Hand | Integration | **Extern-Watchdog:** Ein Ventil, das ohne Freigabe länger als *maximale Laufzeit ohne Freigabe* offen ist, wird abgeschaltet, mit Push-Nachricht. Das gilt auch für Ventile, die beim Start von Home Assistant schon offen sind. **Prüfung nach Neustart:** Ist beim Start ein Ventil offen, das die Bewässerung nicht selbst geöffnet hat, kommt sofort eine Push-Nachricht, nicht erst beim Abschalten. Ebenso, wenn ein Lauf noch aktiv ist, sein Ventil aber zu ist. **Nicht erreichbar:** Ist ein Ventil 30 s `unavailable`, kommt eine Push-Nachricht. Nicht erreichbare Ventile werden nie gestartet. Ein laufender Lauf wird nicht abgebrochen, denn ein Relais bleibt bei WLAN-Verlust meist an: Er zählt bis zu seinem Ende weiter. Kommt das Ventil rechtzeitig offen zurück, läuft es normal zu Ende. Kommt es geschlossen zurück, endet der Lauf. Kommt es erst nach dem Laufende zurück und ist noch offen, wird es sofort geschlossen, auch nach einem Neustart. Zu jedem Fall gibt es eine Push-Nachricht. |
 | 2 – Brain | Integration | Laufzeitende, Cooldown, Startfenster, Parallel-Limit, Verteiler, Automatik. |
 
 Push-Nachrichten kommen je Ursache **nur einmal**, bis der Fehler behoben ist. Ein dauerhaft ausgefallener Sensor erzeugt also nicht alle 30 Sekunden eine Nachricht.
@@ -354,6 +354,7 @@ Im Echtbetrieb ist ein Neustart mitten in einem Lauf noch nicht geprüft, siehe 
 
 | Version | Änderungen |
 |---|---|
+| 0.4.5 | Ein nicht erreichbares Ventil bricht den laufenden Lauf nicht mehr ab, er zählt bis zu seinem Ende weiter. Ist er bei der Rückkehr des Ventils schon vorbei, wird es sofort geschlossen statt erst nach dem Extern-Watchdog. Startfenster über Mitternacht möglich (z. B. 22:00–06:00). |
 | 0.4.4 | Übernahme alter Helfer und Migration aus 0.2.x entfernt, Code aufgeräumt. |
 | 0.4.3 | Push-Nachrichten an mehrere Handys. Jede Einstellung im Einrichtungsdialog hat jetzt einen kurzen Hilfetext. |
 | 0.4.2 | Push-Nachricht nach einem Neustart, wenn ein Ventil offen ist, das die Bewässerung nicht geöffnet hat, oder wenn ein Lauf aktiv, sein Ventil aber zu ist. Handy für Push-Nachrichten per Auswahlliste statt Freitext. |

@@ -79,6 +79,7 @@ ZONE_SPEICHER_DEFAULTS = {
     "freigabe": False,
     "handstart": False,
     "per_hand": False,         # laufender Lauf wurde von Hand gestartet
+    "zu_schliessen": False,    # Lauf endete, Ventil war nicht erreichbar
 }
 
 # HmIP: Plattform und Puffer der Selbstabschaltung (on_time = Rest + Puffer)
@@ -86,6 +87,7 @@ HMIP_PLATTFORM = "homematicip_local"
 HMIP_PUFFER_SEKUNDEN = 300
 
 # Ventil gilt als unerreichbar, wenn es so lange unavailable ist.
+# Solange läuft ein laufender Lauf weiter (kurzer WLAN-Aussetzer).
 VENTIL_WEG_SEKUNDEN = 30
 
 # So lange nach dem eigenen Ausschalten gilt ein noch „an“ gemeldetes

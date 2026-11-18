@@ -475,6 +475,7 @@ class Anlage:
             on_time = max(60, int(rest) + HMIP_PUFFER_SEKUNDEN)
             await self._dienst(HMIP_PLATTFORM, "switch_set_on_time",
                                {"entity_id": zone.ventil, "on_time": on_time})
+        zone.s["zu_schliessen"] = False
         await self._ventil(zone, True)
         zone.s["laeufe"] = int(zone.s["laeufe"]) + 1
         self._ende_planen(zone)
@@ -486,6 +487,25 @@ class Anlage:
             zone.ende_abbruch = None
         if self._ist_verfuegbar(zone.ventil):
             await self._ventil(zone, False)
+        else:
+            # Ein Relais bleibt bei WLAN-Verlust an. Kommt das Ventil
+            # zurück, wird es sofort geschlossen (_nachschliessen).
+            zone.s["zu_schliessen"] = True
+
+    async def _nachschliessen(self, zone: Zone) -> None:
+        """Ventil schließen, dessen Lauf endete, während es weg war."""
+        if (not zone.s.get("zu_schliessen")
+                or not self._ist_verfuegbar(zone.ventil)):
+            return
+        zone.s["zu_schliessen"] = False
+        self.speichern()
+        if zone.freigabe or not self._ist_an(zone.ventil):
+            return
+        await self._ventil(zone, False)
+        self._gemeldete_fehler.discard(f"zu_{zone.nr}")
+        self._melde(f"zu_{zone.nr}",
+                    f"{zone.titel}: Ventil wieder erreichbar und noch offen, "
+                    "der Lauf war schon beendet. Ventil wurde geschlossen.")
 
     @callback
     def _on_ventil(self, event: Event[EventStateChangedData]) -> None:
@@ -509,9 +529,39 @@ class Anlage:
                     zone.weg_abbruch = async_call_later(
                         self.hass, VENTIL_WEG_SEKUNDEN,
                         partial(self._ventil_weg, zone))
-            elif zone.weg_abbruch:
-                zone.weg_abbruch()
-                zone.weg_abbruch = None
+            else:
+                if zone.weg_abbruch:
+                    zone.weg_abbruch()
+                    zone.weg_abbruch = None
+                if zone.s.get("zu_schliessen"):
+                    self.hass.async_create_task(self._nachschliessen(zone))
+                elif (self.gestartet and zone.freigabe and alt is not None
+                        and alt.state == STATE_UNAVAILABLE):
+                    self.hass.async_create_task(
+                        self._zurueck_im_lauf(zone, neu_an))
+        self.benachrichtigen()
+
+    async def _zurueck_im_lauf(self, zone: Zone, an: bool) -> None:
+        """Ventil ist während eines Laufs wieder erreichbar."""
+        gemeldet = f"ventil_{zone.nr}" in self._gemeldete_fehler
+        if an:
+            # Relais lief durch: Lauf geht normal weiter.
+            if gemeldet and (ende := zone.ende):
+                self._gemeldete_fehler.discard(f"zurueck_{zone.nr}")
+                self._melde(f"zurueck_{zone.nr}",
+                            f"{zone.titel}: Ventil wieder erreichbar, Lauf "
+                            f"geht weiter bis {dt_util.as_local(ende):%H:%M}.")
+            return
+        # Ventil kam geschlossen zurück (Gerät neu gestartet, PulseTime).
+        async with self._lock:
+            if not zone.freigabe or self._ist_an(zone.ventil):
+                return
+            await self._beende(zone, "Ventil kam geschlossen zurück")
+            self.speichern()
+        self._gemeldete_fehler.discard(f"zurueck_{zone.nr}")
+        self._melde(f"zurueck_{zone.nr}",
+                    f"{zone.titel}: Ventil wieder erreichbar, aber zu. "
+                    "Der Lauf wurde beendet.")
         self.benachrichtigen()
 
     def _extern_watchdog_starten(self, zone: Zone) -> None:
@@ -533,12 +583,9 @@ class Anlage:
         self._melde(f"extern_{zone.nr}", text)
 
     async def _ventil_weg(self, zone: Zone, _now: datetime) -> None:
+        """Toleranz abgelaufen: Zyklus meldet das fehlende Ventil."""
         zone.weg_abbruch = None
-        if zone.ende_abbruch:
-            zone.ende_abbruch()
-            zone.ende_abbruch = None
-        self._melde(f"ventil_{zone.nr}",
-                    f"{zone.titel}: Ventil {zone.ventil} nicht erreichbar.")
+        await self.async_zyklus()
 
     @callback
     def _zaehler_reset(self, _now: datetime) -> None:
@@ -554,18 +601,37 @@ class Anlage:
     #  Brain: Bedarfsermittlung je Zone
     # ------------------------------------------------------------------
 
+    def _fenster(self, jetzt: datetime) -> tuple[datetime, datetime] | None:
+        """Laufendes bzw. nächstes Startfenster als (auf, zu).
+
+        Liegt das Ende vor dem Anfang (z. B. 22:00–06:00), geht das
+        Fenster über Mitternacht. Gleiche Zeiten = ganzer Tag.
+        """
+        start_txt = self.opt.get(CONF_FENSTER_START)
+        ende_txt = self.opt.get(CONF_FENSTER_ENDE)
+        if not start_txt or not ende_txt:
+            return None
+        auf = _uhrzeit(jetzt, start_txt)
+        zu = _uhrzeit(jetzt, ende_txt)
+        if zu <= auf:
+            if jetzt < zu:
+                auf -= timedelta(days=1)
+            else:
+                zu += timedelta(days=1)
+        return auf, zu
+
     def _fenster_pruefen(self, zone: Zone, jetzt: datetime) -> str | None:
         """Ruhezeitfenster: None = Start erlaubt, sonst Klartextgrund.
 
         Nur Startsperre, keine globale Sperre: eine laufende Zone wird
         nicht mitten im Lauf abgewürgt.
         """
-        start_txt = self.opt.get(CONF_FENSTER_START)
-        ende_txt = self.opt.get(CONF_FENSTER_ENDE)
-        if not start_txt or not ende_txt:
+        fenster = self._fenster(jetzt)
+        if fenster is None:
             return None
-        fenster_auf = _uhrzeit(jetzt, start_txt)
-        fenster_zu = _uhrzeit(jetzt, ende_txt)
+        fenster_auf, fenster_zu = fenster
+        start_txt = self.opt[CONF_FENSTER_START]
+        ende_txt = self.opt[CONF_FENSTER_ENDE]
         if jetzt < fenster_auf:
             return f"Ruhezeit, Start ab {start_txt[:5]}"
         if jetzt >= fenster_zu:
@@ -593,9 +659,32 @@ class Anlage:
 
         # --- Ventil erreichbar? ---------------------------------------
         if not self._ist_verfuegbar(zone.ventil):
-            self._melde(f"ventil_{zone.nr}",
+            st = self.hass.states.get(zone.ventil)
+            weg = ((jetzt - st.last_changed).total_seconds() if st
+                   else VENTIL_WEG_SEKUNDEN)
+            melden = weg >= VENTIL_WEG_SEKUNDEN
+            # Ein Relais bleibt bei WLAN-Verlust an: ein laufender Lauf
+            # läuft bis zu seinem Ende weiter. Ist das Ventil danach noch
+            # weg, wird es bei Rückkehr geschlossen (_nachschliessen).
+            ende = zone.ende
+            if (zone.freigabe and zone.handstart and ende and jetzt < ende
+                    and (self.master or zone.s.get("per_hand"))):
+                if melden:
+                    self._melde(
+                        f"ventil_{zone.nr}",
                         f"{zone.titel}: Ventil {zone.ventil} nicht "
-                        "erreichbar. Zone wird nicht gestartet.")
+                        "erreichbar. Der Lauf zählt bis "
+                        f"{dt_util.as_local(ende):%H:%M} weiter. Ist das "
+                        "Ventil dann noch weg, wird es bei Rückkehr "
+                        "geschlossen.")
+                rest = (ende - jetzt).total_seconds() / 60.0
+                return ergebnis(ST_LAEUFT,
+                                f"noch {rest:.0f} min, Ventil nicht erreichbar",
+                                True, 10000.0)
+            if melden and not zone.freigabe:
+                self._melde(f"ventil_{zone.nr}",
+                            f"{zone.titel}: Ventil {zone.ventil} nicht "
+                            "erreichbar. Zone wird nicht gestartet.")
             return ergebnis(ST_FEHLER, "Ventil nicht erreichbar")
         self._fehler_quittieren(f"ventil_{zone.nr}")
 
@@ -779,8 +868,9 @@ class Anlage:
             self.nachholen = {}
 
         # --- Nachholaufträge nach Fensterende verwerfen ----------------
-        ende_txt = self.opt.get(CONF_FENSTER_ENDE)
-        if self.nachholen and ende_txt and jetzt >= _uhrzeit(jetzt, ende_txt):
+        fenster = self._fenster(jetzt)
+        if self.nachholen and fenster and not (
+                fenster[0] <= jetzt < fenster[1]):
             _LOGGER.info("%d Nachholaufträge verworfen (Ruhezeit erreicht)",
                          len(self.nachholen))
             self.nachholen = {}
@@ -799,6 +889,10 @@ class Anlage:
             self._rasen_frei_ab = jetzt + timedelta(seconds=sekunden)
             _LOGGER.info("Rasen beendet, Gartenzonen gesperrt für %ss", sekunden)
         self._rasen_lief = self.rasen_aktiv
+
+        # --- Ventile schließen, deren Lauf endete, als sie weg waren ----
+        for z in zonen:
+            await self._nachschliessen(z)
 
         # --- Alle Zonen bewerten ---------------------------------------
         bewertungen = [self._bewerte_zone(z, jetzt) for z in zonen]
