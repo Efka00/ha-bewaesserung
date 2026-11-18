@@ -267,6 +267,10 @@ class BewaesserungOptionsFlow(OptionsFlow):
     async def async_step_init(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
+        # Neu laden bricht ein laufendes Ausblasen ab: erst beenden lassen.
+        anlage = getattr(self.config_entry, "runtime_data", None)
+        if getattr(anlage, "ausblasen_aktiv", False):
+            return self.async_abort(reason="ausblasen_laeuft")
         menue = ["anlage", "ausblasen", "zone_neu"]
         if self._zonen:
             menue += ["zone_bearbeiten", "zone_loeschen"]
@@ -287,6 +291,13 @@ class BewaesserungOptionsFlow(OptionsFlow):
                 self.hass, dict(self.config_entry.options)),
         )
 
+    def _ventile(self, ausser: str | None = None) -> set[str]:
+        return {str(z[CONF_VENTIL]) for zid, z in self._zonen.items()
+                if zid != ausser and z.get(CONF_VENTIL)}
+
+    def _steckdose(self) -> str | None:
+        return self.config_entry.options.get(CONF_AUSBLASEN_STECKDOSE)
+
     def _ausblas_kandidaten(self) -> list[tuple[str, dict[str, Any]]]:
         """Zonen, die ausgeblasen werden können: alle außer Rasen."""
         return sorted(
@@ -298,15 +309,25 @@ class BewaesserungOptionsFlow(OptionsFlow):
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
         kandidaten = self._ausblas_kandidaten()
+        fehler: dict[str, str] = {}
         if user_input is not None:
             daten = _bereinige(dict(user_input))
             gewaehlt = set(daten.pop(CONF_AUSBLASEN_ZONEN, []))
             daten[CONF_AUSBLASEN_OHNE] = [
                 zid for zid, _z in kandidaten if zid not in gewaehlt]
             daten.setdefault(CONF_AUSBLASEN_STECKDOSE, None)
-            return self._speichern(anlage=daten)
+            # Ein Zonenventil als Steckdose: der Extern-Watchdog der Zone
+            # würde den Kompressor nach max_extern abschalten.
+            if daten[CONF_AUSBLASEN_STECKDOSE] in self._ventile():
+                fehler[CONF_AUSBLASEN_STECKDOSE] = "steckdose_ist_ventil"
+            else:
+                return self._speichern(anlage=daten)
         w = {**ANLAGE_DEFAULTS, **self.config_entry.options}
         ohne = set(w.get(CONF_AUSBLASEN_OHNE) or [])
+        if user_input is not None:
+            w.update(user_input)
+            ohne = {zid for zid, _z in kandidaten
+                    if zid not in set(user_input.get(CONF_AUSBLASEN_ZONEN, []))}
         zonen_auswahl = selector.SelectSelector(selector.SelectSelectorConfig(
             options=[selector.SelectOptionDict(value=zid, label=zone_titel(z))
                      for zid, z in kandidaten],
@@ -335,6 +356,7 @@ class BewaesserungOptionsFlow(OptionsFlow):
                                       if zid not in ohne]):
                     zonen_auswahl,
             }),
+            errors=fehler,
         )
 
     async def async_step_zone_neu(
@@ -345,6 +367,8 @@ class BewaesserungOptionsFlow(OptionsFlow):
             daten = _bereinige(user_input)
             if self._nr_vergeben(daten[CONF_NR]):
                 fehler[CONF_NR] = "nr_vergeben"
+            elif daten[CONF_VENTIL] == self._steckdose():
+                fehler[CONF_VENTIL] = "ventil_ist_steckdose"
             else:
                 zonen = self._zonen
                 zonen[ulid_now()] = daten
@@ -377,6 +401,8 @@ class BewaesserungOptionsFlow(OptionsFlow):
             daten = _bereinige(user_input)
             if self._nr_vergeben(daten[CONF_NR], ausser=self._zone_id):
                 fehler[CONF_NR] = "nr_vergeben"
+            elif daten[CONF_VENTIL] == self._steckdose():
+                fehler[CONF_VENTIL] = "ventil_ist_steckdose"
             else:
                 zonen = self._zonen
                 zonen[self._zone_id] = daten

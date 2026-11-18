@@ -4,7 +4,7 @@ Custom Integration für [Home Assistant](https://www.home-assistant.io/) zur Ste
 
 Die Integration entscheidet selbst, **welche Zone wann wie lange** gießt: nach Uhrzeit, nach Bodenfeuchte oder auf Knopfdruck. Dabei achtet sie darauf, dass die Wasserleitung nicht überlastet wird, der Rasen Vorrang bekommt und ein Ventil nie unbemerkt offen bleibt. Alles wird in der Oberfläche von Home Assistant eingerichtet. Es sind keine Helfer (`input_boolean`, `timer` …), Automationen oder YAML nötig.
 
-> **Stand:** Version 0.5.0, im Alltag mit 17 Zonen (Tasmota- und Homematic-IP-Ventile) im Einsatz. Die Oberfläche ist nur auf Deutsch.
+> **Stand:** Version 0.5.1, im Alltag mit 17 Zonen (Tasmota- und Homematic-IP-Ventile) im Einsatz. Die Oberfläche ist nur auf Deutsch.
 
 ---
 
@@ -193,7 +193,7 @@ Vor dem Frost müssen die Leitungen leer sein. Dafür bläst die Integration die
 
 | Einstellung | Standard | Bedeutung |
 |---|---|---|
-| Kompressor-Steckdose | leer | Optional. Wird zu jeder Gruppe ein- und in der Pause ausgeschaltet. Leer = Kompressor von Hand. |
+| Kompressor-Steckdose | leer | Optional. Wird zu jeder Gruppe ein- und in der Pause ausgeschaltet. Leer = Kompressor von Hand. Darf nicht das Ventil einer Zone sein. |
 | Ausblaszeit je Zone | 5 min | So lange bleibt jedes Ventil offen. |
 | Zonen am Stück | 4 | Nach so vielen Zonen macht der Kompressor Pause. |
 | Pause für den Kompressor | 10 min | Steckdose aus, damit der Kompressor abkühlt. |
@@ -213,7 +213,8 @@ Die Zonen laufen in der Reihenfolge ihrer Nummer. Der Status der Anlage zeigt de
 **Solange ausgeblasen wird,** ruht die Bewässerung komplett, und Handstarts werden abgelehnt.
 
 - **Abbrechen:** Schalter *Ausblasen* ausschalten. Steckdose aus, offenes Ventil zu, Push-Nachricht.
-- **Neustart von Home Assistant:** Das Ausblasen wird **nicht** fortgesetzt. Steckdose und offenes Ventil werden beim Start abgeschaltet, und es kommt eine Push-Nachricht. Das Gleiche gilt, wenn die Einstellungen während des Ausblasens geändert werden.
+- **Neustart von Home Assistant:** Das Ausblasen wird **nicht** fortgesetzt. Steckdose und offenes Ventil werden beim Start abgeschaltet, und es kommt eine Push-Nachricht.
+- **Einstellungen:** Solange ausgeblasen wird, lässt sich *Konfigurieren* nicht öffnen, weil das Speichern die Integration neu lädt und das Ausblasen abbrechen würde.
 - **Nicht erreichbares Ventil:** wird übersprungen und in der Push-Nachricht am Ende genannt.
 
 Bei Homematic-IP-Ventilen wird vor dem Öffnen `ON_TIME` auf Ausblaszeit + 5 min gesetzt. Bei Tasmota muss `PulseTime` länger sein als die Ausblaszeit.
@@ -393,6 +394,7 @@ Im Echtbetrieb ist ein Neustart mitten in einem Lauf noch nicht geprüft, siehe 
 
 | Version | Änderungen |
 |---|---|
+| 0.5.1 | *Konfigurieren* ist gesperrt, solange ausgeblasen wird, statt das Ausblasen still abzubrechen. Die Kompressor-Steckdose darf nicht zugleich Ventil einer Zone sein, sonst schaltet deren Watchdog den Kompressor ab. |
 | 0.5.0 | Neu: **Ausblasen im Winter** mit Kompressor-Steckdose, Gruppen und Pausen. Außerdem warten die Rückkehr eines Ventils und die Prüfung nach dem Neustart 15 s auf den echten Zustand. Tasmota meldet nach dem Verbinden kurz „aus“, was sonst einen laufenden Lauf beendet oder eine falsche Push-Nachricht ausgelöst hätte. |
 | 0.4.5 | Ein nicht erreichbares Ventil bricht den laufenden Lauf nicht mehr ab, er zählt bis zu seinem Ende weiter. Ist er bei der Rückkehr des Ventils schon vorbei, wird es sofort geschlossen statt erst nach dem Extern-Watchdog. Startfenster über Mitternacht möglich (z. B. 22:00–06:00). |
 | 0.4.4 | Übernahme alter Helfer und Migration aus 0.2.x entfernt, Code aufgeräumt. |

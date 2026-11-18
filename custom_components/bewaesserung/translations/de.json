@@ -35,8 +35,13 @@
     }
   },
   "options": {
+    "abort": {
+      "ausblasen_laeuft": "Das Ausblasen läuft gerade. Einstellungen erst ändern, wenn es fertig oder abgebrochen ist (Schalter „Ausblasen“ aus)."
+    },
     "error": {
-      "nr_vergeben": "Diese Zonennummer ist bereits vergeben."
+      "nr_vergeben": "Diese Zonennummer ist bereits vergeben.",
+      "steckdose_ist_ventil": "Diese Entity ist schon das Ventil einer Zone. Bitte die Steckdose des Kompressors wählen.",
+      "ventil_ist_steckdose": "Diese Entity ist als Kompressor-Steckdose fürs Ausblasen eingetragen."
     },
     "step": {
       "init": {
