@@ -4,7 +4,7 @@ Custom Integration für [Home Assistant](https://www.home-assistant.io/) zur Ste
 
 Die Integration entscheidet selbst, **welche Zone wann wie lange** gießt: nach Uhrzeit, nach Bodenfeuchte oder auf Knopfdruck. Dabei achtet sie darauf, dass die Wasserleitung nicht überlastet wird, der Rasen Vorrang bekommt und ein Ventil nie unbemerkt offen bleibt. Alles wird in der Oberfläche von Home Assistant eingerichtet. Es sind keine Helfer (`input_boolean`, `timer` …), Automationen oder YAML nötig.
 
-> **Stand:** Version 0.4.5, im Alltag mit 17 Zonen (Tasmota- und Homematic-IP-Ventile) im Einsatz. Die Oberfläche ist nur auf Deutsch.
+> **Stand:** Version 0.5.0, im Alltag mit 17 Zonen (Tasmota- und Homematic-IP-Ventile) im Einsatz. Die Oberfläche ist nur auf Deutsch.
 
 ---
 
@@ -18,6 +18,7 @@ Die Integration entscheidet selbst, **welche Zone wann wie lange** gießt: nach 
 - [Einrichtung](#einrichtung)
 - [Entities](#entities)
 - [Bedienung im Alltag](#bedienung-im-alltag)
+- [Ausblasen im Winter](#ausblasen-im-winter)
 - [Betriebsarten einer Zone](#betriebsarten-einer-zone)
 - [So entscheidet die Steuerung](#so-entscheidet-die-steuerung)
 - [Schutzmechanismen](#schutzmechanismen)
@@ -39,6 +40,7 @@ Die Integration entscheidet selbst, **welche Zone wann wie lange** gießt: nach 
 - **Ruhezeitfenster** (z. B. nur zwischen 06:00 und 22:00 Uhr automatisch starten).
 - **Abkühlzeit (Cooldown)** nach jedem Lauf und ein **Tageslimit** im Feuchtemodus.
 - **Schutz vor offenen Ventilen:** Watchdog für von Hand geöffnete Ventile, Erkennung nicht erreichbarer Ventile, bei Homematic IP zusätzlich die Selbstabschaltung im Gerät.
+- **Ausblasen im Winter:** bläst die Zonen nacheinander mit dem Kompressor aus, mit Pausen für den Kompressor.
 - **Push-Nachrichten** bei Fehlern (optional).
 - **Klartext-Status** je Zone: was sie gerade tut und warum.
 
@@ -99,6 +101,7 @@ Die Integration kann nur einmal eingerichtet werden. Beim Hinzufügen werden die
 Jede Einstellung hat im Dialog einen kurzen Hilfetext. Alle Einstellungen lassen sich später ändern: *Einstellungen → Geräte & Dienste → Bewässerung → Konfigurieren*. Dort gibt es ein Menü:
 
 - **Anlage einstellen**
+- **Ausblasen (Winter)**, siehe [Ausblasen im Winter](#ausblasen-im-winter)
 - **Zone hinzufügen**
 - **Zone bearbeiten**
 - **Zonen löschen** (entfernt Gerät und Entities der Zone)
@@ -147,6 +150,7 @@ Die Entity-IDs entstehen aus den Gerätenamen. Bei einer Zone „Zone 3 Gemüse�
 | Entity | Beispiel-ID | Bedeutung |
 |---|---|---|
 | Schalter **Automatik** | `switch.bewasserung_automatik` | An = Zeit- und Feuchtesteuerung aktiv. Aus = nur Handstart. |
+| Schalter **Ausblasen** | `switch.bewasserung_ausblasen` | An = Ausblasen starten, aus = abbrechen. Siehe [Ausblasen im Winter](#ausblasen-im-winter). |
 | Sensor **Status** | `sensor.bewasserung_status` | z. B. „2 aktiv“, „Rasen läuft (1 aktiv)“, „Automatik aus“. Attribute: `aktive_zonen`, `laeufe_heute`, `rasen_aktiv`, `nachholen` (Anzahl offener Nachholaufträge), `sperre`. |
 | Binärsensor **Läuft** | `binary_sensor.bewasserung_lauft` | An, solange mindestens eine Zone eine Freigabe hat. |
 | Binärsensor **Rasen aktiv** | `binary_sensor.bewasserung_rasen_aktiv` | An, solange eine Rasenzone läuft oder per Handstart angefordert ist. |
@@ -178,6 +182,41 @@ Die Entity-IDs entstehen aus den Gerätenamen. Bei einer Zone „Zone 3 Gemüse�
 - **Alles anhalten:** *Automatik* ausschalten. Automatisch gestartete Läufe enden sofort. Von Hand gestartete laufen zu Ende. Offene Nachholaufträge verfallen.
 - **Laufzeit, Startzeit, Sollwert ändern:** direkt an den Entities, wirkt sofort. Wird die Laufzeit einer laufenden Zone geändert, gilt die neue Laufzeit ab dem ursprünglichen Start. Bei Homematic-IP-Ventilen bleibt dabei die beim Start gesetzte `ON_TIME` bestehen.
 - **Ventil direkt schalten** (an der Ventil-Entity statt am Handstart): Das umgeht die Steuerung. Die Zone erscheint dann als „Läuft extern“ und belegt ihren Platz. Nach *maximaler Laufzeit ohne Freigabe* wird das Ventil abgeschaltet.
+
+---
+
+## Ausblasen im Winter
+
+Vor dem Frost müssen die Leitungen leer sein. Dafür bläst die Integration die Zonen nacheinander mit Druckluft aus.
+
+**Einstellungen** unter *Konfigurieren → Ausblasen (Winter)*:
+
+| Einstellung | Standard | Bedeutung |
+|---|---|---|
+| Kompressor-Steckdose | leer | Optional. Wird zu jeder Gruppe ein- und in der Pause ausgeschaltet. Leer = Kompressor von Hand. |
+| Ausblaszeit je Zone | 5 min | So lange bleibt jedes Ventil offen. |
+| Zonen am Stück | 4 | Nach so vielen Zonen macht der Kompressor Pause. |
+| Pause für den Kompressor | 10 min | Steckdose aus, damit der Kompressor abkühlt. |
+| Vorlauf | 10 s | Der Kompressor läuft so lange an, bevor das erste Ventil einer Gruppe öffnet. |
+| Zonen ausblasen | alle außer Rasen | Abgewählte Zonen werden ausgelassen. Neue Zonen sind automatisch dabei. Rasenzonen sind nie dabei. |
+
+**Ablauf** nach dem Einschalten des Schalters *Ausblasen*:
+
+1. Laufende Zonen werden beendet, Nachholaufträge verworfen.
+2. Steckdose an, Vorlauf abwarten.
+3. Erste Zone auf, Ausblaszeit abwarten, Zone zu, *Startabstand* der Anlage abwarten, nächste Zone auf.
+4. Nach der letzten Zone einer Gruppe: erst Steckdose aus, dann Ventil zu, dann Pause.
+5. Weiter mit Schritt 2, bis alle Zonen durch sind. Am Ende kommt eine Push-Nachricht.
+
+Die Zonen laufen in der Reihenfolge ihrer Nummer. Der Status der Anlage zeigt den Fortschritt, z. B. „Ausblasen: Zone 5 Randstreifen (4/12), noch 3 min“ oder „Ausblasen: Pause für den Kompressor, noch 8 min (5/12)“.
+
+**Solange ausgeblasen wird,** ruht die Bewässerung komplett, und Handstarts werden abgelehnt.
+
+- **Abbrechen:** Schalter *Ausblasen* ausschalten. Steckdose aus, offenes Ventil zu, Push-Nachricht.
+- **Neustart von Home Assistant:** Das Ausblasen wird **nicht** fortgesetzt. Steckdose und offenes Ventil werden beim Start abgeschaltet, und es kommt eine Push-Nachricht. Das Gleiche gilt, wenn die Einstellungen während des Ausblasens geändert werden.
+- **Nicht erreichbares Ventil:** wird übersprungen und in der Push-Nachricht am Ende genannt.
+
+Bei Homematic-IP-Ventilen wird vor dem Öffnen `ON_TIME` auf Ausblaszeit + 5 min gesetzt. Bei Tasmota muss `PulseTime` länger sein als die Ausblaszeit.
 
 ---
 
@@ -268,7 +307,7 @@ Die Absicherung ist in drei Ebenen aufgebaut:
 | Ebene | Wer | Was |
 |---|---|---|
 | 0 – Hardware | Ventil | `PulseTime`, Auto-Off oder HmIP-`ON_TIME`: schließt auch ohne Home Assistant. |
-| 1 – Hand | Integration | **Extern-Watchdog:** Ein Ventil, das ohne Freigabe länger als *maximale Laufzeit ohne Freigabe* offen ist, wird abgeschaltet, mit Push-Nachricht. Das gilt auch für Ventile, die beim Start von Home Assistant schon offen sind. **Prüfung nach Neustart:** Ist beim Start ein Ventil offen, das die Bewässerung nicht selbst geöffnet hat, kommt sofort eine Push-Nachricht, nicht erst beim Abschalten. Ebenso, wenn ein Lauf noch aktiv ist, sein Ventil aber zu ist. **Nicht erreichbar:** Ist ein Ventil 30 s `unavailable`, kommt eine Push-Nachricht. Nicht erreichbare Ventile werden nie gestartet. Ein laufender Lauf wird nicht abgebrochen, denn ein Relais bleibt bei WLAN-Verlust meist an: Er zählt bis zu seinem Ende weiter. Kommt das Ventil rechtzeitig offen zurück, läuft es normal zu Ende. Kommt es geschlossen zurück, endet der Lauf. Kommt es erst nach dem Laufende zurück und ist noch offen, wird es sofort geschlossen, auch nach einem Neustart. Zu jedem Fall gibt es eine Push-Nachricht. |
+| 1 – Hand | Integration | **Extern-Watchdog:** Ein Ventil, das ohne Freigabe länger als *maximale Laufzeit ohne Freigabe* offen ist, wird abgeschaltet, mit Push-Nachricht. Das gilt auch für Ventile, die beim Start von Home Assistant schon offen sind. **Prüfung nach Neustart:** Ist beim Start ein Ventil offen, das die Bewässerung nicht selbst geöffnet hat, kommt sofort eine Push-Nachricht, nicht erst beim Abschalten. Ebenso, wenn ein Lauf noch aktiv ist, sein Ventil aber zu ist. **Nicht erreichbar:** Ist ein Ventil 30 s `unavailable`, kommt eine Push-Nachricht. Nicht erreichbare Ventile werden nie gestartet. Ein laufender Lauf wird nicht abgebrochen, denn ein Relais bleibt bei WLAN-Verlust meist an: Er zählt bis zu seinem Ende weiter. Kommt das Ventil rechtzeitig offen zurück, läuft es normal zu Ende. Kommt es geschlossen zurück, endet der Lauf. Kommt es erst nach dem Laufende zurück und ist noch offen, wird es sofort geschlossen, auch nach einem Neustart. Zu jedem Fall gibt es eine Push-Nachricht. Bewertet wird erst, wenn das Ventil 15 s lang wieder erreichbar ist, weil Tasmota nach dem Verbinden kurz „aus“ meldet, bevor der echte Zustand kommt. Dasselbe gilt für die Prüfung nach dem Neustart. |
 | 2 – Brain | Integration | Laufzeitende, Cooldown, Startfenster, Parallel-Limit, Verteiler, Automatik. |
 
 Push-Nachrichten kommen je Ursache **nur einmal**, bis der Fehler behoben ist. Ein dauerhaft ausgefallener Sensor erzeugt also nicht alle 30 Sekunden eine Nachricht.
@@ -354,6 +393,7 @@ Im Echtbetrieb ist ein Neustart mitten in einem Lauf noch nicht geprüft, siehe 
 
 | Version | Änderungen |
 |---|---|
+| 0.5.0 | Neu: **Ausblasen im Winter** mit Kompressor-Steckdose, Gruppen und Pausen. Außerdem warten die Rückkehr eines Ventils und die Prüfung nach dem Neustart 15 s auf den echten Zustand. Tasmota meldet nach dem Verbinden kurz „aus“, was sonst einen laufenden Lauf beendet oder eine falsche Push-Nachricht ausgelöst hätte. |
 | 0.4.5 | Ein nicht erreichbares Ventil bricht den laufenden Lauf nicht mehr ab, er zählt bis zu seinem Ende weiter. Ist er bei der Rückkehr des Ventils schon vorbei, wird es sofort geschlossen statt erst nach dem Extern-Watchdog. Startfenster über Mitternacht möglich (z. B. 22:00–06:00). |
 | 0.4.4 | Übernahme alter Helfer und Migration aus 0.2.x entfernt, Code aufgeräumt. |
 | 0.4.3 | Push-Nachrichten an mehrere Handys. Jede Einstellung im Einrichtungsdialog hat jetzt einen kurzen Hilfetext. |

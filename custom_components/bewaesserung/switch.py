@@ -1,4 +1,4 @@
-"""Schalter: Automatik (Anlage) und Handstart (je Zone)."""
+"""Schalter: Automatik und Ausblasen (Anlage), Handstart (je Zone)."""
 
 from __future__ import annotations
 
@@ -17,7 +17,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry,
                             async_add_entities: AddConfigEntryEntitiesCallback
                             ) -> None:
     anlage: Anlage = entry.runtime_data
-    async_add_entities([AutomatikSchalter(anlage)])
+    async_add_entities([AutomatikSchalter(anlage), AusblasenSchalter(anlage)])
     for zone in anlage.zonen.values():
         async_add_entities([HandstartSchalter(anlage, zone)])
 
@@ -40,6 +40,29 @@ class AutomatikSchalter(AnlageEntity, SwitchEntity):
 
     async def async_turn_off(self, **kwargs: Any) -> None:
         await self.anlage.async_setze_master(False)
+
+
+class AusblasenSchalter(AnlageEntity, SwitchEntity):
+    """Ausblasen im Winter: an startet den Ablauf, aus bricht ihn ab.
+
+    Bläst alle ausgewählten Zonen (ohne Rasen) nacheinander mit dem
+    Kompressor aus. Solange ruht die Bewässerung, Handstart ist gesperrt.
+    """
+
+    _attr_icon = "mdi:weather-windy"
+
+    def __init__(self, anlage: Anlage) -> None:
+        super().__init__(anlage, "ausblasen", "Ausblasen")
+
+    @property
+    def is_on(self) -> bool:
+        return self.anlage.ausblasen_aktiv
+
+    async def async_turn_on(self, **kwargs: Any) -> None:
+        await self.anlage.async_ausblasen_start()
+
+    async def async_turn_off(self, **kwargs: Any) -> None:
+        await self.anlage.async_ausblasen_stop()
 
 
 class HandstartSchalter(ZonenEntity, SwitchEntity):

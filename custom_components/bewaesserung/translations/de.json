@@ -43,6 +43,7 @@
         "title": "Bewässerung",
         "menu_options": {
           "anlage": "Anlage einstellen",
+          "ausblasen": "Ausblasen (Winter)",
           "zone_neu": "Zone hinzufügen",
           "zone_bearbeiten": "Zone bearbeiten",
           "zone_loeschen": "Zonen löschen"
@@ -76,6 +77,26 @@
           "notify_dienst": "Handys aus der Companion-App, die Fehler als Push-Nachricht bekommen. Mehrere möglich. Leer = nur Eintrag im Log."
         },
         "description": "Globale Einstellungen, gelten für alle Zonen."
+      },
+      "ausblasen": {
+        "title": "Ausblasen (Winter)",
+        "description": "Bläst die Zonen nacheinander mit Druckluft aus. Gestartet wird über den Schalter „Ausblasen“ an der Anlage, ausschalten bricht ab. Solange ruht die Bewässerung. Rasenzonen sind nie dabei. Zwischen zwei Zonen gilt der Startabstand der Anlage.",
+        "data": {
+          "ausblasen_steckdose": "Kompressor-Steckdose",
+          "ausblasen_minuten": "Ausblaszeit je Zone",
+          "ausblasen_gruppe": "Zonen am Stück",
+          "ausblasen_pause_minuten": "Pause für den Kompressor",
+          "ausblasen_vorlauf_sekunden": "Vorlauf",
+          "ausblasen_zonen": "Zonen ausblasen"
+        },
+        "data_description": {
+          "ausblasen_steckdose": "Optional. Wird zu jeder Gruppe eingeschaltet und in der Pause ausgeschaltet. Leer = Kompressor von Hand.",
+          "ausblasen_minuten": "So lange bleibt jedes Ventil offen.",
+          "ausblasen_gruppe": "Nach so vielen Zonen macht der Kompressor Pause.",
+          "ausblasen_pause_minuten": "Steckdose aus, damit der Kompressor abkühlt.",
+          "ausblasen_vorlauf_sekunden": "Kompressor läuft so lange an, bevor das erste Ventil einer Gruppe öffnet.",
+          "ausblasen_zonen": "Abgewählte Zonen werden ausgelassen. Neue Zonen sind automatisch dabei."
+        }
       },
       "zone_neu": {
         "title": "Zone hinzufügen",

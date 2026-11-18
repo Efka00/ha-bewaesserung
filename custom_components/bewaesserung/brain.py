@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import asyncio
 from datetime import datetime, timedelta
+import math
 from functools import partial
 import logging
 from typing import Any
@@ -46,6 +47,12 @@ from homeassistant.util import dt as dt_util
 from .const import (
     ANLAGE_DEFAULTS,
     AUS_KARENZ_SEKUNDEN,
+    CONF_AUSBLASEN_GRUPPE,
+    CONF_AUSBLASEN_MINUTEN,
+    CONF_AUSBLASEN_OHNE,
+    CONF_AUSBLASEN_PAUSE,
+    CONF_AUSBLASEN_STECKDOSE,
+    CONF_AUSBLASEN_VORLAUF,
     CONF_BASIS_PRIO,
     CONF_COOLDOWN,
     CONF_COOLDOWN_ZONE,
@@ -89,6 +96,7 @@ from .const import (
     ST_RUHEZEIT,
     ST_WARTET,
     CONF_ZONEN,
+    RUECKKEHR_SEKUNDEN,
     VENTIL_WEG_SEKUNDEN,
     ZONE_DEFAULTS,
     ZONE_SPEICHER_DEFAULTS,
@@ -145,6 +153,7 @@ class Zone:
         self.ende_abbruch: CALLBACK_TYPE | None = None
         self.extern_abbruch: CALLBACK_TYPE | None = None
         self.weg_abbruch: CALLBACK_TYPE | None = None
+        self.rueck_abbruch: CALLBACK_TYPE | None = None
         # Zeitpunkt des letzten eigenen Ausschaltbefehls.
         self.aus_gesendet: datetime | None = None
 
@@ -198,7 +207,8 @@ class Zone:
         return start + timedelta(minutes=self.laufzeit) if start else None
 
     def abbrechen(self) -> None:
-        for name in ("ende_abbruch", "extern_abbruch", "weg_abbruch"):
+        for name in ("ende_abbruch", "extern_abbruch", "weg_abbruch",
+                     "rueck_abbruch"):
             abbruch = getattr(self, name)
             if abbruch:
                 abbruch()
@@ -236,8 +246,16 @@ class Anlage:
         # Nachholaufträge {zone_nr: Restlaufzeit in Minuten}. Bewusst nur
         # im Speicher: verfallen bei Automatik aus, Fensterende, Neustart.
         self.nachholen: dict[int, float] = {}
-        # Erster Zyklus nach dem Start: fremd geöffnete Ventile melden.
-        self._start_pruefen = True
+        # Nach dem Start: fremd geöffnete Ventile melden. Zonen, deren
+        # Ventil noch nicht stabil gemeldet ist, werden später geprüft.
+        self._start_offen: set[str] | None = None
+
+        # Ausblasen: laufender Ablauf und seine Anzeige.
+        self._ausblasen_task: asyncio.Task[None] | None = None
+        self._ausblasen: dict[str, Any] | None = None
+        # Nach einem Neustart mitten im Ausblasen: aufräumen und melden.
+        self._ausblasen_neustart = False
+        self._steckdose_aus_offen = False
 
         # Für die Anlagen-Sensoren.
         self.status = "Startet"
@@ -279,6 +297,16 @@ class Anlage:
         for sid in list(speicher):
             if sid not in self.zonen:
                 del speicher[sid]
+        # Neustart mitten im Ausblasen: nicht fortsetzen. Das offene Ventil
+        # schließt _nachschliessen, die Steckdose der erste Zyklus.
+        anlage = self.daten["anlage"]
+        if anlage.pop("ausblasen", False):
+            self._ausblasen_neustart = True
+            self._steckdose_aus_offen = True
+            offen = self.zonen.get(anlage.pop("ausblasen_zone", None) or "")
+            if offen is not None:
+                offen.s["zu_schliessen"] = True
+        anlage.pop("ausblasen_zone", None)
         self.speichern()
 
     @callback
@@ -296,6 +324,9 @@ class Anlage:
         self._abmelden.append(async_at_started(self.hass, self._on_ha_gestartet))
 
     async def async_stop(self) -> None:
+        # Keine Zyklen mehr aus dieser Instanz (z. B. nach dem Ausblasen).
+        self.gestartet = False
+        await self.async_ausblasen_stop()
         for abmelden in self._abmelden:
             abmelden()
         self._abmelden.clear()
@@ -352,6 +383,9 @@ class Anlage:
 
     async def async_setze_handstart(self, zone: Zone, an: bool) -> None:
         """Handbedienung soll ohne Wartezeit greifen (beide Richtungen)."""
+        if an and self.ausblasen_aktiv:
+            raise HomeAssistantError(
+                "Ausblasen läuft, Handstart ist gesperrt.")
         zone.s["handstart"] = an
         self.speichern()
         self.benachrichtigen()
@@ -388,6 +422,14 @@ class Anlage:
         Ein Relais behält seinen Zustand, wenn das Gerät vom Netz geht.
         """
         return self._zustand(entity_id) not in UNGUELTIG
+
+    def _stabil(self, entity_id: str) -> bool:
+        """Erreichbar und seit RUECKKEHR_SEKUNDEN unverändert."""
+        st = self.hass.states.get(entity_id)
+        if st is None or st.state in UNGUELTIG:
+            return False
+        alter = (dt_util.utcnow() - st.last_changed).total_seconds()
+        return alter >= RUECKKEHR_SEKUNDEN
 
     def _zahl(self, entity_id: str | None) -> float | None:
         """Zahl lesen, nie auf 0 zurückfallen."""
@@ -504,8 +546,8 @@ class Anlage:
         await self._ventil(zone, False)
         self._gemeldete_fehler.discard(f"zu_{zone.nr}")
         self._melde(f"zu_{zone.nr}",
-                    f"{zone.titel}: Ventil wieder erreichbar und noch offen, "
-                    "der Lauf war schon beendet. Ventil wurde geschlossen.")
+                    f"{zone.titel}: Ventil war noch offen, obwohl kein "
+                    "Lauf mehr aktiv ist. Es wurde geschlossen.")
 
     @callback
     def _on_ventil(self, event: Event[EventStateChangedData]) -> None:
@@ -524,26 +566,45 @@ class Anlage:
                 zone.extern_abbruch()
                 zone.extern_abbruch = None
             # Ventil verschwindet (WLAN weg, Gerät überhitzt, Strom weg).
-            if neu is not None and neu.state == STATE_UNAVAILABLE:
-                if zone.weg_abbruch is None:
+            if neu is None or neu.state in UNGUELTIG:
+                if zone.rueck_abbruch:
+                    zone.rueck_abbruch()
+                    zone.rueck_abbruch = None
+                if (neu is not None and neu.state == STATE_UNAVAILABLE
+                        and zone.weg_abbruch is None):
                     zone.weg_abbruch = async_call_later(
                         self.hass, VENTIL_WEG_SEKUNDEN,
                         partial(self._ventil_weg, zone))
-            else:
-                if zone.weg_abbruch:
-                    zone.weg_abbruch()
-                    zone.weg_abbruch = None
-                if zone.s.get("zu_schliessen"):
-                    self.hass.async_create_task(self._nachschliessen(zone))
-                elif (self.gestartet and zone.freigabe and alt is not None
-                        and alt.state == STATE_UNAVAILABLE):
-                    self.hass.async_create_task(
-                        self._zurueck_im_lauf(zone, neu_an))
+                continue
+            if zone.weg_abbruch:
+                zone.weg_abbruch()
+                zone.weg_abbruch = None
+            # Ventil ist zurück: erst bewerten, wenn der echte Zustand da
+            # ist. Beim Start übernehmen das der Zyklus und die
+            # Neustart-Prüfung.
+            if (self.gestartet and zone.rueck_abbruch is None
+                    and (alt is None or alt.state in UNGUELTIG)):
+                zone.rueck_abbruch = async_call_later(
+                    self.hass, RUECKKEHR_SEKUNDEN,
+                    partial(self._rueckkehr, zone,
+                            f"ventil_{zone.nr}" in self._gemeldete_fehler))
         self.benachrichtigen()
 
-    async def _zurueck_im_lauf(self, zone: Zone, an: bool) -> None:
+    async def _rueckkehr(self, zone: Zone, war_gemeldet: bool,
+                         _now: datetime) -> None:
+        """Ventil ist seit RUECKKEHR_SEKUNDEN wieder erreichbar."""
+        zone.rueck_abbruch = None
+        if not self._ist_verfuegbar(zone.ventil):
+            return
+        if zone.s.get("zu_schliessen"):
+            await self._nachschliessen(zone)
+        elif zone.freigabe:
+            await self._zurueck_im_lauf(zone, self._ist_an(zone.ventil),
+                                        war_gemeldet)
+
+    async def _zurueck_im_lauf(self, zone: Zone, an: bool,
+                               gemeldet: bool) -> None:
         """Ventil ist während eines Laufs wieder erreichbar."""
-        gemeldet = f"ventil_{zone.nr}" in self._gemeldete_fehler
         if an:
             # Relais lief durch: Lauf geht normal weiter.
             if gemeldet and (ende := zone.ende):
@@ -575,6 +636,8 @@ class Anlage:
         """Watchdog: Ventil läuft zu lange ohne Freigabe -> abschalten."""
         zone.extern_abbruch = None
         if zone.freigabe or not self._ist_an(zone.ventil):
+            return
+        if self._ausblasen and self._ausblasen.get("zone") is zone:
             return
         await self._ventil(zone, False)
         text = (f"{zone.titel}: Ventil lief länger als {zone.max_extern} min "
@@ -859,6 +922,27 @@ class Anlage:
         jetzt = dt_util.now()
         zonen = self.zonen_sortiert()
 
+        # --- Nach einem Neustart mitten im Ausblasen aufräumen ---------
+        if self._steckdose_aus_offen:
+            steckdose = self.opt.get(CONF_AUSBLASEN_STECKDOSE)
+            if not steckdose:
+                self._steckdose_aus_offen = False
+            elif (self._ist_verfuegbar(steckdose)
+                    and await self._steckdose(False)):
+                self._steckdose_aus_offen = False
+        if self._ausblasen_neustart:
+            self._ausblasen_neustart = False
+            self._gemeldete_fehler.discard("ausblasen")
+            self._melde("ausblasen",
+                        "Ausblasen wurde durch einen Neustart abgebrochen. "
+                        "Kompressor und offenes Ventil werden abgeschaltet. "
+                        "Bitte neu starten, wenn noch Zonen fehlen.")
+
+        # --- Ausblasen: Bewässerung ruht komplett ----------------------
+        if self._ausblasen is not None:
+            self._ausblasen_anzeige(jetzt)
+            return
+
         # --- Automatik aus: nur Handstart erlaubt ----------------------
         # Automatisch gestartete Läufe enden in der Bewertung, Handstarts
         # laufen normal (mit Rasenvorrang, Verteiler- und Parallel-Limit).
@@ -892,7 +976,8 @@ class Anlage:
 
         # --- Ventile schließen, deren Lauf endete, als sie weg waren ----
         for z in zonen:
-            await self._nachschliessen(z)
+            if z.s.get("zu_schliessen") and self._stabil(z.ventil):
+                await self._nachschliessen(z)
 
         # --- Alle Zonen bewerten ---------------------------------------
         bewertungen = [self._bewerte_zone(z, jetzt) for z in zonen]
@@ -974,11 +1059,22 @@ class Anlage:
         # Umgekehrt kann ein Ventil im Neustart selbst neu gestartet und
         # zu sein, während der Lauf noch als aktiv gilt. Nur Läufe von
         # vor dem Start prüfen (b["laeuft"]) – frische Starts aus diesem
-        # Zyklus haben ihr Ventil eben erst geschaltet.
-        if self._start_pruefen:
-            self._start_pruefen = False
+        # Zyklus haben ihr Ventil eben erst geschaltet. Erst prüfen, wenn
+        # das Ventil RUECKKEHR_SEKUNDEN stabil ist (Tasmota meldet nach
+        # dem Verbinden kurz „aus“); unerreichbare Ventile meldet die
+        # Bewertung selbst.
+        if self._start_offen is None:
+            self._start_offen = set(self.zonen)
+        if self._start_offen:
             for b in bewertungen:
                 z = b["zone"]
+                if z.id not in self._start_offen:
+                    continue
+                if self._ist_verfuegbar(z.ventil) and not self._stabil(z.ventil):
+                    continue
+                self._start_offen.discard(z.id)
+                if not self._ist_verfuegbar(z.ventil):
+                    continue
                 if b["zustand"] == ST_EXTERN:
                     self._melde(
                         f"start_{z.nr}",
@@ -1118,6 +1214,210 @@ class Anlage:
         """
         zone.s["handstart"] = False
         await self._freigabe_aus(zone, grund)
+
+    # ------------------------------------------------------------------
+    #  Ausblasen (Winter): Zonen nacheinander mit Druckluft
+    # ------------------------------------------------------------------
+
+    @property
+    def ausblasen_aktiv(self) -> bool:
+        return self._ausblasen is not None
+
+    def ausblas_zonen(self) -> list[Zone]:
+        """Alle Zonen außer Rasen und den abgewählten, nach Nummer."""
+        ohne = set(self.opt.get(CONF_AUSBLASEN_OHNE) or [])
+        return [z for z in self.zonen_sortiert()
+                if not z.rasen and z.id not in ohne]
+
+    async def _steckdose(self, an: bool) -> bool:
+        """Kompressor-Steckdose schalten; ohne Steckdose immer True."""
+        steckdose = self.opt.get(CONF_AUSBLASEN_STECKDOSE)
+        if not steckdose:
+            return True
+        return await self._dienst(
+            "switch", "turn_on" if an else "turn_off",
+            {"entity_id": steckdose})
+
+    async def async_ausblasen_start(self) -> None:
+        """Laufende Zonen beenden, dann den Ablauf starten."""
+        if self._ausblasen is not None:
+            return
+        zonen = self.ausblas_zonen()
+        if not zonen:
+            raise HomeAssistantError(
+                "Keine Zonen zum Ausblasen ausgewählt.")
+        steckdose = self.opt.get(CONF_AUSBLASEN_STECKDOSE)
+        if steckdose and not self._ist_verfuegbar(steckdose):
+            raise HomeAssistantError(
+                f"Kompressor-Steckdose {steckdose} ist nicht erreichbar.")
+        async with self._lock:
+            for abbruch in self._start_abbruch.values():
+                abbruch()
+            self._start_abbruch.clear()
+            self._geplant.clear()
+            self.nachholen = {}
+            for zone in self.zonen_sortiert():
+                if zone.freigabe or zone.handstart:
+                    await self._beende(zone, "Ausblasen")
+            self._ausblasen = {"phase": "start", "zone": None, "bis": None,
+                               "nr": 0, "gesamt": len(zonen)}
+            self.daten["anlage"]["ausblasen"] = True
+            self.speichern()
+            self._ausblasen_task = self.hass.async_create_background_task(
+                self._ausblasen_ablauf(zonen), f"{DOMAIN}_ausblasen")
+        _LOGGER.info("Ausblasen gestartet (%d Zonen)", len(zonen))
+        self._ausblasen_anzeige(dt_util.now())
+        self.benachrichtigen()
+
+    async def async_ausblasen_stop(self) -> None:
+        """Ablauf abbrechen; das Aufräumen macht der Ablauf selbst."""
+        task = self._ausblasen_task
+        if task is None or task.done():
+            return
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+
+    async def _ausblasen_warten(self, phase: str, sekunden: float,
+                                zone: Zone | None = None) -> None:
+        assert self._ausblasen is not None
+        self._ausblasen.update(
+            phase=phase, zone=zone,
+            bis=dt_util.now() + timedelta(seconds=sekunden))
+        self._ausblasen_anzeige(dt_util.now())
+        self.benachrichtigen()
+        if sekunden > 0:
+            await asyncio.sleep(sekunden)
+
+    async def _ausblasen_schliessen(self, zone: Zone) -> bool:
+        """Ventil zu. Klappt das nicht, schließt es _nachschliessen,
+        sobald es wieder erreichbar ist (auch nach einem Neustart)."""
+        assert self._ausblasen is not None
+        self._ausblasen["zone"] = None
+        if (self._ist_verfuegbar(zone.ventil)
+                and await self._ventil(zone, False)):
+            self.daten["anlage"]["ausblasen_zone"] = None
+            self.speichern()
+            return True
+        zone.s["zu_schliessen"] = True
+        self.speichern()
+        return False
+
+    async def _ausblasen_ablauf(self, zonen: list[Zone]) -> None:
+        """Je Gruppe: Steckdose an, Vorlauf, Zonen nacheinander, Steckdose
+        aus, Pause. Zwischen zwei Zonen erst zu, dann Startabstand, dann
+        auf. Am Gruppenende erst Steckdose aus, dann Ventil zu."""
+        o = self.opt
+        dauer = float(o[CONF_AUSBLASEN_MINUTEN]) * 60
+        gruppe = max(1, int(o[CONF_AUSBLASEN_GRUPPE]))
+        pause = float(o[CONF_AUSBLASEN_PAUSE]) * 60
+        vorlauf = float(o[CONF_AUSBLASEN_VORLAUF])
+        abstand = float(o[CONF_START_ABSTAND])
+        assert self._ausblasen is not None
+        fertig = 0
+        ausgelassen: list[str] = []
+        fertig_ok = False
+        grund = ""
+        try:
+            for i, zone in enumerate(zonen):
+                self._ausblasen["nr"] = i + 1
+                if i % gruppe == 0:
+                    if i:
+                        await self._ausblasen_warten("pause", pause)
+                    if not await self._steckdose(True):
+                        grund = "Steckdose ließ sich nicht einschalten"
+                        return
+                    await self._ausblasen_warten("vorlauf", vorlauf)
+                elif abstand:
+                    await self._ausblasen_warten("wechsel", abstand)
+                if not self._ist_verfuegbar(zone.ventil):
+                    ausgelassen.append(zone.titel)
+                    continue
+                if zone.hmip_abschaltung and self._ist_hmip(zone.ventil):
+                    await self._dienst(
+                        HMIP_PLATTFORM, "switch_set_on_time",
+                        {"entity_id": zone.ventil,
+                         "on_time": int(dauer) + HMIP_PUFFER_SEKUNDEN})
+                zone.s["zu_schliessen"] = False
+                self._ausblasen["zone"] = zone
+                self.daten["anlage"]["ausblasen_zone"] = zone.id
+                self.speichern()
+                if not await self._ventil(zone, True):
+                    ausgelassen.append(zone.titel)
+                    await self._ausblasen_schliessen(zone)
+                    continue
+                await self._ausblasen_warten("zone", dauer, zone)
+                gruppen_ende = (i % gruppe == gruppe - 1
+                                or i == len(zonen) - 1)
+                if gruppen_ende:
+                    await self._steckdose(False)
+                await self._ausblasen_schliessen(zone)
+                fertig += 1
+            fertig_ok = True
+        finally:
+            # Auch bei Abbruch: Kompressor aus, dann offenes Ventil zu.
+            # Klappt eins davon nicht (z. B. beim Herunterfahren), bleibt
+            # die Markierung stehen und der nächste Start räumt auf.
+            aufgeraeumt = await self._steckdose(False)
+            offen = self._ausblasen.get("zone") if self._ausblasen else None
+            if offen is not None:
+                aufgeraeumt &= await self._ausblasen_schliessen(offen)
+            self._ausblasen = None
+            self._ausblasen_task = None
+            if aufgeraeumt:
+                self.daten["anlage"].pop("ausblasen", None)
+                self.daten["anlage"].pop("ausblasen_zone", None)
+            self.speichern()
+            if fertig_ok:
+                text = f"Ausblasen fertig: {fertig} von {len(zonen)} Zonen."
+            else:
+                text = (f"Ausblasen abgebrochen nach {fertig} von "
+                        f"{len(zonen)} Zonen.")
+                if grund:
+                    text += f" {grund}."
+            if ausgelassen:
+                text += " Nicht erreichbar: " + ", ".join(ausgelassen) + "."
+            _LOGGER.info("%s", text)
+            self._gemeldete_fehler.discard("ausblasen")
+            self._melde("ausblasen", text)
+            self._status(None if self.master else "Automatik aus")
+            self.benachrichtigen()
+            if self.gestartet:
+                self.hass.async_create_task(self.async_zyklus())
+
+    def _ausblasen_anzeige(self, jetzt: datetime) -> None:
+        """Status der Anlage und aller Zonen während des Ausblasens."""
+        a = self._ausblasen
+        if a is None:
+            return
+        bis: datetime | None = a.get("bis")
+        rest = (max(0.0, (bis - jetzt).total_seconds()) if bis else 0.0)
+        noch = (f"noch {math.ceil(rest / 60)} min" if rest >= 60
+                else f"noch {rest:.0f} s")
+        zaehler = f"({a['nr']}/{a['gesamt']})"
+        aktuell: Zone | None = a.get("zone")
+        phase = a.get("phase")
+        if phase == "zone" and aktuell is not None:
+            text = f"Ausblasen: {aktuell.titel} {zaehler}, {noch}"
+        elif phase == "pause":
+            text = f"Ausblasen: Pause für den Kompressor, {noch} {zaehler}"
+        elif phase == "vorlauf":
+            text = f"Ausblasen: Kompressor läuft an {zaehler}"
+        elif phase == "start":
+            text = "Ausblasen startet"
+        else:
+            text = f"Ausblasen: Wechsel {zaehler}"
+        for zone in self.zonen.values():
+            if zone is aktuell:
+                zone.zustand, zone.grund = ST_LAEUFT, f"Ausblasen, {noch}"
+            else:
+                zone.zustand, zone.grund = ST_GESPERRT, "Ausblasen läuft"
+            zone.sensorfehler = False
+        self.aktive = 1 if aktuell is not None else 0
+        self.sperre = "Ausblasen"
+        self.status = text
 
     # ------------------------------------------------------------------
     #  Statusausgabe

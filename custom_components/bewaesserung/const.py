@@ -17,6 +17,15 @@ CONF_FENSTER_HANDSTART_FREI = "fenster_handstart_frei"
 CONF_RESET_UHRZEIT = "reset_uhrzeit"
 CONF_NOTIFY = "notify_dienst"
 
+# ---- Ausblasen (Winter) ---------------------------------------------
+CONF_AUSBLASEN_STECKDOSE = "ausblasen_steckdose"
+CONF_AUSBLASEN_MINUTEN = "ausblasen_minuten"
+CONF_AUSBLASEN_GRUPPE = "ausblasen_gruppe"
+CONF_AUSBLASEN_PAUSE = "ausblasen_pause_minuten"
+CONF_AUSBLASEN_VORLAUF = "ausblasen_vorlauf_sekunden"
+# Zonen-IDs, die nicht ausgeblasen werden (Rasenzonen nie).
+CONF_AUSBLASEN_OHNE = "ausblasen_ohne"
+
 # Standardwerte der Anlage
 ANLAGE_DEFAULTS = {
     CONF_MAX_PARALLEL: 3,
@@ -28,6 +37,10 @@ ANLAGE_DEFAULTS = {
     CONF_FENSTER_HART: True,
     CONF_FENSTER_HANDSTART_FREI: True,
     CONF_RESET_UHRZEIT: "00:10:00",
+    CONF_AUSBLASEN_MINUTEN: 5,
+    CONF_AUSBLASEN_GRUPPE: 4,
+    CONF_AUSBLASEN_PAUSE: 10,
+    CONF_AUSBLASEN_VORLAUF: 10,
 }
 
 # Plausibilität der Feuchtesensoren (fest, nicht einstellbar).
@@ -86,9 +99,14 @@ ZONE_SPEICHER_DEFAULTS = {
 HMIP_PLATTFORM = "homematicip_local"
 HMIP_PUFFER_SEKUNDEN = 300
 
-# Ventil gilt als unerreichbar, wenn es so lange unavailable ist.
-# Solange läuft ein laufender Lauf weiter (kurzer WLAN-Aussetzer).
+# Ventil gilt als unerreichbar (Push-Nachricht), wenn es so lange
+# unavailable ist.
 VENTIL_WEG_SEKUNDEN = 30
+
+# Nach der Rückkehr eines Ventils so lange warten, bevor sein Zustand
+# bewertet wird: Tasmota meldet nach dem Verbinden kurz „aus“, bevor
+# der echte Zustand kommt.
+RUECKKEHR_SEKUNDEN = 15
 
 # So lange nach dem eigenen Ausschalten gilt ein noch „an“ gemeldetes
 # Ventil als schließend, nicht als von Hand geschaltet.

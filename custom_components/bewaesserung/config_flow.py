@@ -23,6 +23,12 @@ from homeassistant.util.ulid import ulid_now
 
 from .const import (
     ANLAGE_DEFAULTS,
+    CONF_AUSBLASEN_GRUPPE,
+    CONF_AUSBLASEN_MINUTEN,
+    CONF_AUSBLASEN_OHNE,
+    CONF_AUSBLASEN_PAUSE,
+    CONF_AUSBLASEN_STECKDOSE,
+    CONF_AUSBLASEN_VORLAUF,
     CONF_BASIS_PRIO,
     CONF_COOLDOWN,
     CONF_COOLDOWN_ZONE,
@@ -51,6 +57,9 @@ from .const import (
 )
 
 CONF_ZONE_AUSWAHL = "zone"
+# Formularfeld „Zonen ausblasen“; gespeichert wird die Gegenmenge
+# CONF_AUSBLASEN_OHNE, damit neue Zonen automatisch dabei sind.
+CONF_AUSBLASEN_ZONEN = "ausblasen_zonen"
 
 
 def _zahl(minimum: float, maximum: float, schritt: float = 1,
@@ -179,7 +188,8 @@ def _zone_schema(werte: dict[str, Any], verteiler: list[str]) -> vol.Schema:
 def _bereinige(daten: dict[str, Any]) -> dict[str, Any]:
     """Zahlen aus NumberSelector als int, wo sinnvoll."""
     for key in (CONF_NR, CONF_BASIS_PRIO, CONF_MAX_PARALLEL,
-                CONF_START_ABSTAND, CONF_RASEN_NACHLAUF, CONF_MAX_EXTERN):
+                CONF_START_ABSTAND, CONF_RASEN_NACHLAUF, CONF_MAX_EXTERN,
+                CONF_AUSBLASEN_GRUPPE, CONF_AUSBLASEN_VORLAUF):
         if key in daten:
             daten[key] = int(daten[key])
     return daten
@@ -257,7 +267,7 @@ class BewaesserungOptionsFlow(OptionsFlow):
     async def async_step_init(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
-        menue = ["anlage", "zone_neu"]
+        menue = ["anlage", "ausblasen", "zone_neu"]
         if self._zonen:
             menue += ["zone_bearbeiten", "zone_loeschen"]
         return self.async_show_menu(step_id="init", menu_options=menue)
@@ -275,6 +285,56 @@ class BewaesserungOptionsFlow(OptionsFlow):
             step_id="anlage",
             data_schema=_anlage_schema(
                 self.hass, dict(self.config_entry.options)),
+        )
+
+    def _ausblas_kandidaten(self) -> list[tuple[str, dict[str, Any]]]:
+        """Zonen, die ausgeblasen werden können: alle außer Rasen."""
+        return sorted(
+            ((zid, z) for zid, z in self._zonen.items()
+             if not z.get(CONF_RASEN)),
+            key=lambda kv: int(kv[1][CONF_NR]))
+
+    async def async_step_ausblasen(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        kandidaten = self._ausblas_kandidaten()
+        if user_input is not None:
+            daten = _bereinige(dict(user_input))
+            gewaehlt = set(daten.pop(CONF_AUSBLASEN_ZONEN, []))
+            daten[CONF_AUSBLASEN_OHNE] = [
+                zid for zid, _z in kandidaten if zid not in gewaehlt]
+            daten.setdefault(CONF_AUSBLASEN_STECKDOSE, None)
+            return self._speichern(anlage=daten)
+        w = {**ANLAGE_DEFAULTS, **self.config_entry.options}
+        ohne = set(w.get(CONF_AUSBLASEN_OHNE) or [])
+        zonen_auswahl = selector.SelectSelector(selector.SelectSelectorConfig(
+            options=[selector.SelectOptionDict(value=zid, label=zone_titel(z))
+                     for zid, z in kandidaten],
+            multiple=True,
+            mode=selector.SelectSelectorMode.LIST,
+        ))
+        return self.async_show_form(
+            step_id="ausblasen",
+            data_schema=vol.Schema({
+                _optional(CONF_AUSBLASEN_STECKDOSE, w): selector.EntitySelector(
+                    selector.EntitySelectorConfig(domain="switch")),
+                vol.Required(CONF_AUSBLASEN_MINUTEN,
+                             default=w[CONF_AUSBLASEN_MINUTEN]):
+                    _zahl(0.5, 60, 0.5, "min"),
+                vol.Required(CONF_AUSBLASEN_GRUPPE,
+                             default=w[CONF_AUSBLASEN_GRUPPE]):
+                    _zahl(1, 50),
+                vol.Required(CONF_AUSBLASEN_PAUSE,
+                             default=w[CONF_AUSBLASEN_PAUSE]):
+                    _zahl(0, 120, 0.5, "min"),
+                vol.Required(CONF_AUSBLASEN_VORLAUF,
+                             default=w[CONF_AUSBLASEN_VORLAUF]):
+                    _zahl(0, 600, 1, "s"),
+                vol.Optional(CONF_AUSBLASEN_ZONEN,
+                             default=[zid for zid, _z in kandidaten
+                                      if zid not in ohne]):
+                    zonen_auswahl,
+            }),
         )
 
     async def async_step_zone_neu(
